@@ -145,12 +145,15 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 
 | Method | Path | 登入 | 說明 |
 |---|---|---|---|
-| GET | `/api/health` | 免 | 健康檢查，會真的 ping 一次 DB。回 `{"ok":true,"total":74628}` |
-| GET | `/api/counties` | 免 | 縣市清單（22 組） |
-| GET | `/api/academic-years` | 免 | 學年度清單（114 → 104） |
-| GET | `/api/kindergartens` | 免 | 主查詢 |
+| GET | `/api/health` | 免 | 健康檢查，會真的 ping 一次 DB。回 `{"ok":true,"total":6747}` |
+| GET | `/api/counties` | 免 | 縣市清單 |
+| GET | `/api/academic-years` | 免 | 學年度清單（目前只有 114） |
+| GET | `/api/kindergartens` | 免 | 幼兒園主查詢 |
+| GET | `/api/punishments` | 免 | 裁罰紀錄查詢（縣市/鄉鎮/名稱/日期/罰鍰 + 分頁） |
+| GET | `/api/kindergartens/{id}/punishments` | 免 | 單一幼兒園的裁罰紀錄 |
 | GET | `/api/secure/me` | **要** | 我是誰 / 我能看哪個範圍 |
 | GET | `/api/secure/kindergartens` | **要** | 同主查詢，但縣市鎖在權限範圍內 |
+| GET | `/api/secure/punishments` | **要** | 同裁罰查詢，但縣市鎖在權限範圍內 |
 
 `/api/kindergartens` 的查詢參數：
 
@@ -159,11 +162,26 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 | `county` | 全部 | 縣市名稱，例如 `新北市` |
 | `name` | 全部 | 園所名稱關鍵字，用 `LIKE %關鍵字%` |
 | `ownership` | 全部 | `公立` 或 `私立` |
-| `academicYear` | 資料庫最新學年度（114） | 例如 `113` |
+| `academicYear` | 全部 | 選填，例如 `114`。目前資料只有 114，此參數僅為相容保留 |
 | `page` | 1 | 第幾頁 |
 | `pageSize` | 20 | 每頁筆數，上限 100 |
 | `sortBy` | `id` | 只接受白名單欄位 |
 | `sortDir` | `asc` | `asc` / `desc` |
+
+`/api/punishments` 的查詢參數：
+
+| 參數 | 預設 | 說明 |
+|---|---|---|
+| `county` | 全部 | 縣市名稱，例如 `新北市` |
+| `district` | 全部 | 鄉鎮市區，例如 `板橋區` |
+| `name` | 全部 | 園所名稱關鍵字，用 `LIKE %關鍵字%` |
+| `hasFine` | `false` | `true` 只回有罰鍰金額者 |
+| `dateFrom` | 無 | 處分日期起，`YYYY-MM-DD` |
+| `dateTo` | 無 | 處分日期迄，`YYYY-MM-DD` |
+| `page` | 1 | 第幾頁 |
+| `pageSize` | 20 | 每頁筆數，上限 100 |
+| `sortBy` | `punish_date` | 白名單：`punish_date`/`fine_amount`/`school_name`/`district`/`id` |
+| `sortDir` | `desc` | `asc` / `desc` |
 
 回應：
 
@@ -182,10 +200,59 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
       "phone": "(02)26718181"
     }
   ],
-  "total": 6747,
+  "total": 1108,
   "page": 1,
   "pageSize": 20,
-  "academicYear": "114"
+  "academicYear": null
+}
+```
+
+`/api/punishments` 回應（`totalFine` 為符合條件的罰鍰總額；已停業/查無的學校
+`kindergarten_id`、`address` 會是 `null`）：
+
+```json
+{
+  "items": [
+    {
+      "id": 123,
+      "kindergarten_id": 68078,
+      "county": "新北市",
+      "district": "板橋區",
+      "school_name": "新北市私立福音幼兒園",
+      "ownership": "私立",
+      "op_status": "正常",
+      "punish_date": "2024-06-13",
+      "school_name_at_time": "新北市私立福音幼兒園",
+      "doc_no": "新北府教幼字第11311207455號",
+      "legal_basis": "幼兒教育及照顧法 第52條…",
+      "violated_rule": "…",
+      "person": "負責人：○○○",
+      "content": "罰鍰：600,000 元",
+      "fine_amount": 600000,
+      "address": "[220]新北市板橋區福丘里4鄰民族路8號2樓",
+      "phone": "(02)29518767"
+    }
+  ],
+  "total": 328,
+  "totalFine": 24721000,
+  "page": 1,
+  "pageSize": 20,
+  "county": "新北市"
+}
+```
+
+`/api/kindergartens/{id}/punishments` 回應：
+
+```json
+{
+  "kindergarten": {
+    "id": 68078, "school_name": "新北市私立福音幼兒園",
+    "county": "新北市", "district": "板橋區",
+    "address": "[220]…", "phone": "(02)…"
+  },
+  "records": [ { "punish_date": "2024-06-13", "doc_no": "…", "fine_amount": 600000, "content": "罰鍰：600,000 元", "…": "…" } ],
+  "count": 5,
+  "totalFine": 1020000
 }
 ```
 
@@ -193,8 +260,15 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 
 - `county` 原始值長得像 `[01]新北市`、`[33]臺北市`、`[40]臺北市`。
   同一個縣市有多組代碼，所以 API 一律用 `]` 之後的部分當顯示名稱並合併。
-- 每所幼兒園**每個學年度都有一列**（104～114 共 11 個學年度、74,628 列）。
-  所以查詢一定要帶學年度，否則同一間學校會出現 11 次。預設用最新學年度。
+- **kindergarten 表現在只保留最新學年度（114）一份，共 6,747 列、等同「一校一列」。**
+  （原本 104～114 共 11 個學年度、74,628 列已刪除，只留 114。）所以查詢
+  不再需要帶學年度，`id` 也可直接當作「學校身分」使用。
+- **裁罰紀錄放在 `kindergarten_punishment` 表**，來源為
+  [全國教保資訊網—裁罰紀錄查詢](https://ap.ece.moe.edu.tw/webecems/punishSearch.aspx)
+  （目前只爬新北市，共 184 所學校、354 筆紀錄）。透過外鍵
+  `kindergarten_id → kindergarten(id)`（`ON DELETE SET NULL`）串接；
+  已停業（`廢止設立許可`）或查無對應的學校，`kindergarten_id` 為 `NULL`。
+  爬蟲與載入腳本在專案根目錄的 `scraper/`（`scrape.py` 爬取、`load_db.py` 建表載入）。
 
 ## 登入機制（Cognito）
 
@@ -301,6 +375,9 @@ $base = "https://e86tz73y7h.execute-api.us-east-1.amazonaws.com"
 curl "$base/api/health"
 curl "$base/api/counties"
 curl "$base/api/kindergartens?county=新北市&name=非營利&pageSize=5"
+curl "$base/api/punishments?county=新北市&hasFine=true&sortBy=fine_amount&sortDir=desc&pageSize=5"
+curl "$base/api/punishments?county=新北市&district=板橋區&dateFrom=2025-01-01"
+curl "$base/api/kindergartens/68078/punishments"
 ```
 
 看 Lambda 的錯誤訊息：

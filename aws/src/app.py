@@ -1,24 +1,42 @@
 """
 幼兒園查詢 API — 單一 Lambda 處理所有路由（HTTP API payload v2.0）。
 
+資料現況：kindergarten 表只保留最新學年度（114）一份，等同「一校一列」，
+id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指回 kindergarten(id)。
+
 路由：
 
 公開（不需登入）：
-  GET /api/health                 健康檢查（會實際 ping DB）
-  GET /api/counties               縣市清單
-  GET /api/academic-years         學年度清單
-  GET /api/kindergartens          查詢清單（縣市 + 名稱 LIKE + 分頁）
+  GET /api/health                          健康檢查（會實際 ping DB）
+  GET /api/counties                        縣市清單
+  GET /api/academic-years                  學年度清單（目前只有 114）
+  GET /api/kindergartens                   查詢清單（縣市 + 名稱 LIKE + 分頁）
+  GET /api/punishments                     裁罰紀錄查詢（縣市/鄉鎮/名稱/日期/罰鍰 + 分頁）
+  GET /api/kindergartens/{id}/punishments  單一幼兒園的裁罰紀錄
 
 需登入（Cognito ID token，API Gateway 已先驗過簽章與過期）：
-  GET /api/secure/me              我是誰 / 我能看哪個範圍
-  GET /api/secure/kindergartens   同上查詢，但縣市鎖在使用者權限內
+  GET /api/secure/me                       我是誰 / 我能看哪個範圍
+  GET /api/secure/kindergartens            同上查詢，但縣市鎖在使用者權限內
+  GET /api/secure/punishments              同裁罰查詢，但縣市鎖在使用者權限內
 
 /api/kindergartens 支援的 query string：
   county        縣市名稱，例如 新北市（可省略 = 全部）
   name          學校名稱關鍵字，用 LIKE %name% 比對
-  academicYear  學年度，例如 114。預設 = 資料庫中最新學年度
+  ownership     公立 / 私立
+  academicYear  學年度（可省略；目前資料只有 114，保留此參數僅為相容）
   page          第幾頁，從 1 開始，預設 1
   pageSize      每頁筆數，預設 20，最大 100
+  sortBy/sortDir 排序（白名單欄位）
+
+/api/punishments 支援的 query string：
+  county        縣市名稱，例如 新北市（可省略 = 全部）
+  district      鄉鎮市區，例如 板橋區（可省略）
+  name          學校名稱關鍵字，用 LIKE %name% 比對
+  hasFine       true 只回有罰鍰金額者
+  dateFrom      處分日期起（YYYY-MM-DD）
+  dateTo        處分日期迄（YYYY-MM-DD）
+  page/pageSize 分頁，pageSize 上限 100
+  sortBy/sortDir 排序（白名單欄位：punish_date/fine_amount/school_name/district/id）
 """
 
 import json
@@ -41,6 +59,15 @@ SORTABLE = {
     "district": "district",
     "academic_year": "academic_year",
     "ownership": "ownership",
+}
+
+# 裁罰查詢可排序的欄位白名單
+PUNISH_SORTABLE = {
+    "id": "p.id",
+    "punish_date": "p.punish_date",
+    "fine_amount": "p.fine_amount",
+    "school_name": "p.school_name",
+    "district": "p.district",
 }
 
 # Lambda 容器重用時共用連線，省下每次重新握手的時間
@@ -140,12 +167,6 @@ def scoped_county(identity, requested=""):
     return identity["county"] or None
 
 
-def latest_academic_year(cur):
-    cur.execute("SELECT MAX(CAST(academic_year AS UNSIGNED)) AS y FROM kindergarten")
-    row = cur.fetchone()
-    return str(row["y"]) if row and row["y"] else None
-
-
 def handle_health(cur):
     cur.execute("SELECT COUNT(*) AS total FROM kindergarten")
     return respond(200, {"ok": True, "total": cur.fetchone()["total"]})
@@ -186,8 +207,8 @@ def handle_kindergartens(cur, qs, force_county=None):
     sort_by = SORTABLE.get((qs.get("sortBy") or "").strip(), "id")
     sort_dir = "DESC" if (qs.get("sortDir") or "").lower() == "desc" else "ASC"
 
-    if not year:
-        year = latest_academic_year(cur)
+    # 資料只保留最新學年度（114）一份，一校一列，所以不再強制帶學年度。
+    # academicYear 仍可當選填過濾條件（相容舊呼叫）。
 
     where = []
     params = []
@@ -238,6 +259,131 @@ def handle_kindergartens(cur, qs, force_county=None):
 
 
 # ---------------------------------------------------------------------------
+# 裁罰紀錄查詢
+#
+# 資料表 kindergarten_punishment（來源：全國教保資訊網裁罰紀錄查詢，目前只有新北市）。
+# 透過外鍵 kindergarten_id 指回 kindergarten(id)；已停業/查無的學校 kindergarten_id 為 NULL。
+# ---------------------------------------------------------------------------
+def _punish_filters(qs, force_county=None):
+    """組出裁罰查詢的 WHERE 子句與參數（給清單與 handle 共用）。"""
+    county = (qs.get("county") or "").strip() if force_county is None else force_county
+    district = (qs.get("district") or "").strip()
+    name = (qs.get("name") or "").strip()
+    has_fine = (qs.get("hasFine") or "").lower() in ("1", "true", "yes")
+    date_from = (qs.get("dateFrom") or "").strip()
+    date_to = (qs.get("dateTo") or "").strip()
+
+    where = []
+    params = []
+    if county:
+        where.append("p.county = %s")
+        params.append(county)
+    if district:
+        where.append("p.district = %s")
+        params.append(district)
+    if name:
+        where.append("p.school_name LIKE %s")
+        params.append(f"%{name}%")
+    if has_fine:
+        where.append("p.fine_amount IS NOT NULL AND p.fine_amount > 0")
+    # 只接受 YYYY-MM-DD，避免奇怪輸入
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_from):
+        where.append("p.punish_date >= %s")
+        params.append(date_from)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_to):
+        where.append("p.punish_date <= %s")
+        params.append(date_to)
+    return where, params, (county or None)
+
+
+def handle_punishments(cur, qs, force_county=None):
+    """裁罰紀錄清單查詢（含分頁、排序、彙總罰鍰）。
+
+    force_county 不是 None 時，縣市條件一律用它，忽略 query string，
+    給 /api/secure/* 做資料範圍控管用。
+    """
+    where, params, county = _punish_filters(qs, force_county)
+    page = to_int(qs.get("page"), 1, 1, 10000)
+    page_size = to_int(qs.get("pageSize"), 20, 1, 100)
+    sort_by = PUNISH_SORTABLE.get((qs.get("sortBy") or "").strip(), "p.punish_date")
+    sort_dir = "ASC" if (qs.get("sortDir") or "").lower() == "asc" else "DESC"
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    cur.execute(
+        f"SELECT COUNT(*) AS total, COALESCE(SUM(p.fine_amount),0) AS totalFine "
+        f"FROM kindergarten_punishment p {where_sql}",
+        params,
+    )
+    agg = cur.fetchone()
+
+    offset = (page - 1) * page_size
+    cur.execute(
+        f"""SELECT p.id, p.kindergarten_id, p.county, p.district, p.school_name,
+                   p.ownership, p.op_status, p.punish_date, p.school_name_at_time,
+                   p.doc_no, p.legal_basis, p.violated_rule, p.person,
+                   p.content, p.fine_amount,
+                   k.address, k.phone
+            FROM kindergarten_punishment p
+            LEFT JOIN kindergarten k ON k.id = p.kindergarten_id
+            {where_sql}
+            ORDER BY {sort_by} {sort_dir}, p.id ASC
+            LIMIT %s OFFSET %s""",
+        params + [page_size, offset],
+    )
+    items = cur.fetchall()
+
+    return respond(
+        200,
+        {
+            "items": items,
+            "total": agg["total"],
+            "totalFine": int(agg["totalFine"]),
+            "page": page,
+            "pageSize": page_size,
+            "county": county,
+        },
+    )
+
+
+def handle_kindergarten_punishments(cur, kg_id):
+    """單一幼兒園（kindergarten.id）的所有裁罰紀錄。"""
+    try:
+        kg_id = int(kg_id)
+    except (TypeError, ValueError):
+        return respond(400, {"message": "無效的 id"})
+
+    cur.execute(
+        "SELECT id, school_name, county, district, address, phone FROM kindergarten WHERE id = %s",
+        (kg_id,),
+    )
+    school = cur.fetchone()
+    if not school:
+        return respond(404, {"message": f"查無此幼兒園 id={kg_id}"})
+
+    cur.execute(
+        """SELECT id, punish_date, school_name_at_time, doc_no, legal_basis,
+                  violated_rule, person, content, fine_amount
+           FROM kindergarten_punishment
+           WHERE kindergarten_id = %s
+           ORDER BY punish_date DESC, id ASC""",
+        (kg_id,),
+    )
+    records = cur.fetchall()
+    total_fine = sum((r["fine_amount"] or 0) for r in records)
+
+    return respond(
+        200,
+        {
+            "kindergarten": school,
+            "records": records,
+            "count": len(records),
+            "totalFine": total_fine,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # 受保護端點（/api/secure/*）
 #
 # 目前只放「確認登入與權限範圍」用的兩支，
@@ -271,6 +417,14 @@ def handle_secure_kindergartens(cur, qs, identity):
     return handle_kindergartens(cur, qs, force_county=county or "")
 
 
+def handle_secure_punishments(cur, qs, identity):
+    """裁罰查詢，但縣市鎖在使用者權限範圍內（同 handle_secure_kindergartens 模式）。"""
+    county = scoped_county(identity, qs.get("county", ""))
+    if county is None and not identity["isAdmin"]:
+        return respond(403, {"message": "這個帳號沒有設定縣市（custom:county），請聯絡管理者"})
+    return handle_punishments(cur, qs, force_county=county or "")
+
+
 def handler(event, context):
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath", "/")
@@ -293,6 +447,12 @@ def handler(event, context):
                 return handle_academic_years(cur)
             if path == "/api/kindergartens":
                 return handle_kindergartens(cur, qs)
+            if path == "/api/punishments":
+                return handle_punishments(cur, qs)
+            # 單一幼兒園的裁罰紀錄：/api/kindergartens/{id}/punishments
+            m = re.fullmatch(r"/api/kindergartens/(\d+)/punishments", path)
+            if m:
+                return handle_kindergarten_punishments(cur, m.group(1))
 
             # ---- 受保護端點：token 已由 API Gateway 驗過 ----
             if path.startswith("/api/secure/"):
@@ -305,6 +465,8 @@ def handler(event, context):
                     return handle_secure_me(identity)
                 if path == "/api/secure/kindergartens":
                     return handle_secure_kindergartens(cur, qs, identity)
+                if path == "/api/secure/punishments":
+                    return handle_secure_punishments(cur, qs, identity)
 
         return respond(404, {"message": f"Not found: {method} {path}"})
     except Exception as exc:  # noqa: BLE001

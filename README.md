@@ -62,9 +62,10 @@ npm start             # http://localhost:4200
 
 ## 目前完成度
 
-- [x] 幼兒園清單查詢 API（縣市 / 名稱 LIKE / 公私立 / 學年度 / 分頁 / 排序）
+- [x] 幼兒園清單查詢 API（縣市 / 名稱 LIKE / 公私立 / 分頁 / 排序）
 - [x] Angular + PrimeNG 查詢畫面（伺服器端分頁）
 - [x] 前後端皆部署於 AWS，具備可公開存取的 live demo
+- [x] 幼兒園裁罰紀錄爬取與查詢 API（新北市，`kindergarten_punishment` 表，外鍵串回 `kindergarten`）
 - [ ] 財報、Google Map 評論等資料源整合
 - [ ] AI 風險指數分析
 - [ ] 家長回報系統

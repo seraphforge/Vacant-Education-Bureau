@@ -206,6 +206,22 @@ Resources:
       RouteKey: "GET /api/kindergartens"
       Target: !Sub "integrations/${ApiIntegration}"
 
+  RoutePunishments:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/punishments"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  # Punishment records for a single kindergarten. {id} lands in rawPath and the
+  # Lambda extracts it with a regex.
+  RouteKindergartenPunishments:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/kindergartens/{id}/punishments"
+      Target: !Sub "integrations/${ApiIntegration}"
+
   ApiRootRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
