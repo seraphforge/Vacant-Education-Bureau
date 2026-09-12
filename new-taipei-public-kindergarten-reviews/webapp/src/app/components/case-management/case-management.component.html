@@ -1,0 +1,114 @@
+<div class="cases">
+  <div class="cases__filters">
+    <div class="filter">
+      <label>狀態</label>
+      <p-dropdown
+        [options]="statusFilterOptions"
+        optionLabel="label"
+        optionValue="value"
+        [ngModel]="statusFilter()"
+        (ngModelChange)="statusFilter.set($event); applyFilters()"
+        appendTo="body"
+        styleClass="filter__control"
+      ></p-dropdown>
+    </div>
+
+    <div class="filter">
+      <label>依學校篩選（選填）</label>
+      <div class="filter__school">
+        <p-autoComplete
+          [ngModel]="schoolFilter()"
+          (ngModelChange)="schoolFilter.set($event)"
+          (onSelect)="applyFilters()"
+          [suggestions]="schoolSuggestions()"
+          (completeMethod)="searchSchool($event)"
+          field="school_name"
+          [forceSelection]="true"
+          [dropdown]="false"
+          placeholder="輸入學校名稱關鍵字"
+          styleClass="filter__control"
+        ></p-autoComplete>
+        @if (schoolFilter()) {
+          <button
+            type="button"
+            pButton
+            class="p-button-text p-button-sm"
+            icon="pi pi-times"
+            aria-label="清除學校篩選"
+            (click)="clearSchoolFilter()"
+          ></button>
+        }
+      </div>
+    </div>
+  </div>
+
+  <p-table
+    [value]="rows()"
+    [lazy]="true"
+    (onLazyLoad)="loadRows($event)"
+    [paginator]="true"
+    [rows]="pageSize"
+    [totalRecords]="total()"
+    [loading]="loading()"
+    [rowsPerPageOptions]="[20, 50, 100]"
+    dataKey="id"
+    styleClass="p-datatable-sm"
+    [tableStyle]="{ 'min-width': '60rem' }"
+  >
+    <ng-template pTemplate="header">
+      <tr>
+        <th pSortableColumn="created_at" style="width: 12rem">
+          成案時間 <p-sortIcon field="created_at"></p-sortIcon>
+        </th>
+        <th style="width: 9rem">案號</th>
+        <th pSortableColumn="school_name">學校名稱 <p-sortIcon field="school_name"></p-sortIcon></th>
+        <th pSortableColumn="status" style="width: 8rem">
+          狀態 <p-sortIcon field="status"></p-sortIcon>
+        </th>
+        <th>內容摘要</th>
+        <th style="width: 5rem">附件</th>
+        <th style="width: 7rem">操作</th>
+      </tr>
+    </ng-template>
+
+    <ng-template pTemplate="body" let-r>
+      <tr>
+        <td>{{ formatTaipei(r.createdAt) }}</td>
+        <td>{{ r.caseNo }}</td>
+        <td>{{ r.schoolName }}</td>
+        <td><p-tag [value]="r.statusLabel" [severity]="statusSeverity(r.status)"></p-tag></td>
+        <td class="cases__excerpt">{{ r.contentExcerpt }}</td>
+        <td>
+          @if (r.attachmentCount > 0) {
+            <span><i class="pi pi-paperclip"></i> {{ r.attachmentCount }}</span>
+          } @else {
+            —
+          }
+        </td>
+        <td>
+          <button
+            type="button"
+            pButton
+            class="p-button-sm"
+            icon="pi pi-pen-to-square"
+            label="處理"
+            (click)="openCase(r)"
+          ></button>
+        </td>
+      </tr>
+    </ng-template>
+
+    <ng-template pTemplate="emptymessage">
+      <tr>
+        <td colspan="7" class="cases__empty">目前沒有符合條件的回報案件。</td>
+      </tr>
+    </ng-template>
+  </p-table>
+</div>
+
+<!-- 單筆案件處理 Drawer（openReportId() 非 null 時開啟） -->
+<app-report-case-drawer
+  [reportId]="openReportId()"
+  (closed)="closeCase()"
+  (updated)="onCaseUpdated($event)"
+></app-report-case-drawer>

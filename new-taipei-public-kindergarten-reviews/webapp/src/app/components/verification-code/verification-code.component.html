@@ -1,0 +1,60 @@
+<p-dialog
+  header="輸入驗證碼"
+  [visible]="visible()"
+  [modal]="true"
+  [closable]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="{ width: '92vw', maxWidth: '420px' }"
+  (onHide)="onHide()"
+>
+  <div class="otp">
+    <p class="otp__desc">
+      驗證碼已寄到 <strong>{{ maskedEmail() }}</strong>，請於信箱查收後輸入。
+    </p>
+
+    @if (devOtp()) {
+      <p-message
+        severity="info"
+        text="開發模式：已自動預填驗證碼 {{ devOtp() }}（正式模式不會出現）"
+        styleClass="otp__dev"
+      ></p-message>
+    }
+
+    <div class="otp__input">
+      <p-inputOtp
+        [(ngModel)]="codeModel"
+        [length]="6"
+        [integerOnly]="true"
+        (onChange)="onCodeChange($event)"
+      ></p-inputOtp>
+    </div>
+
+    @if (errorMsg()) {
+      <p-message severity="error" [text]="errorMsg()!" styleClass="otp__err"></p-message>
+    }
+    @if (attemptsLeft() !== null) {
+      <p class="otp__attempts">剩餘嘗試次數：{{ attemptsLeft() }}</p>
+    }
+  </div>
+
+  <ng-template pTemplate="footer">
+    <button
+      type="button"
+      pButton
+      class="p-button-text"
+      label="重寄驗證碼"
+      icon="pi pi-refresh"
+      [loading]="resending()"
+      (click)="resend()"
+    ></button>
+    <button
+      type="button"
+      pButton
+      label="確認送出"
+      icon="pi pi-check"
+      [loading]="submitting()"
+      (click)="submit()"
+    ></button>
+  </ng-template>
+</p-dialog>

@@ -1,0 +1,149 @@
+<p-toast></p-toast>
+
+<div class="report">
+  <app-header></app-header>
+
+  <main class="report__main">
+    <div class="report__card">
+      <h2 class="report__title">教保機構問題回報</h2>
+      <p class="report__lead">
+        請填寫以下資訊，我們會寄送驗證碼至您的信箱，驗證後案件才會正式送交主管機關。
+      </p>
+
+      <form #form="ngForm" (ngSubmit)="submit(form)" novalidate>
+        <!-- 姓名（選填） -->
+        <div class="field">
+          <label for="name">姓名</label>
+          <input
+            id="name"
+            type="text"
+            pInputText
+            name="reporterName"
+            [(ngModel)]="reporterName"
+            placeholder="選填"
+            autocomplete="name"
+          />
+        </div>
+
+        <!-- Email（必填 + 格式） -->
+        <div class="field">
+          <label for="email">Email <span class="req">*</span></label>
+          <input
+            id="email"
+            type="email"
+            pInputText
+            name="reporterEmail"
+            #emailCtrl="ngModel"
+            [(ngModel)]="reporterEmail"
+            required
+            email
+            placeholder="用來接收驗證碼與案件進度通知"
+            autocomplete="email"
+          />
+          @if (emailCtrl.touched && emailCtrl.invalid) {
+            <small class="err-text">請輸入有效的 Email</small>
+          }
+        </div>
+
+        <!-- 幼兒園 autocomplete（必填） -->
+        <div class="field">
+          <label for="kg">幼兒園 <span class="req">*</span></label>
+          <p-autoComplete
+            inputId="kg"
+            name="kindergarten"
+            [(ngModel)]="selectedKindergarten"
+            [suggestions]="suggestions()"
+            (completeMethod)="searchKindergarten($event)"
+            field="school_name"
+            [forceSelection]="true"
+            [dropdown]="false"
+            placeholder="輸入幼兒園名稱關鍵字"
+            required
+            styleClass="w-full"
+            [inputStyle]="{ width: '100%' }"
+          >
+            <ng-template let-kg pTemplate="item">
+              <div class="kg-item">
+                <span class="kg-item__name">{{ kg.school_name }}</span>
+                <small class="kg-item__meta">{{ kg.county }}{{ kg.district }}</small>
+              </div>
+            </ng-template>
+          </p-autoComplete>
+        </div>
+
+        <!-- 回報事由（必填） -->
+        <div class="field">
+          <label for="content">回報事由 <span class="req">*</span></label>
+          <textarea
+            id="content"
+            pInputTextarea
+            name="content"
+            [(ngModel)]="content"
+            required
+            rows="5"
+            maxlength="5000"
+            placeholder="請描述您觀察到的狀況（最多 5000 字）"
+          ></textarea>
+          <small class="hint">{{ content.length }} / 5000</small>
+        </div>
+
+        <!-- 附件上傳 -->
+        <div class="field">
+          <label>附件（圖片，選填）</label>
+          <p-fileUpload
+            #fileUpload
+            mode="basic"
+            chooseLabel="選擇圖片"
+            chooseIcon="pi pi-image"
+            [customUpload]="true"
+            [auto]="false"
+            [multiple]="true"
+            [accept]="acceptTypes"
+            [maxFileSize]="maxFileSize"
+            (onSelect)="onSelectFiles($event)"
+          ></p-fileUpload>
+          <small class="hint">最多 {{ maxFiles }} 個檔案，單檔上限 5MB，僅接受圖片格式。</small>
+
+          @if (selectedFiles().length > 0) {
+            <ul class="file-list">
+              @for (f of selectedFiles(); track f.name + f.size; let i = $index) {
+                <li class="file-list__item">
+                  <i class="pi pi-image"></i>
+                  <span class="file-list__name">{{ f.name }}</span>
+                  <span class="file-list__size">{{ formatSize(f.size) }}</span>
+                  <button
+                    type="button"
+                    pButton
+                    class="p-button-text p-button-rounded p-button-sm"
+                    icon="pi pi-times"
+                    aria-label="移除"
+                    (click)="removeFile(i)"
+                  ></button>
+                </li>
+              }
+            </ul>
+          }
+        </div>
+
+        <div class="report__actions">
+          <button
+            type="submit"
+            pButton
+            class="p-button-lg"
+            icon="pi pi-send"
+            label="送出並取得驗證碼"
+            [loading]="submitting()"
+          ></button>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+
+<app-verification-code
+  [visible]="otpVisible()"
+  [draft]="draft()"
+  (verified)="onVerified($event)"
+  (locked)="onLocked()"
+  (closed)="onOtpClosed()"
+></app-verification-code>
