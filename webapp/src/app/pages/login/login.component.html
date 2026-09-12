@@ -1,0 +1,64 @@
+<div class="login-wrap">
+  <p-card styleClass="login-card">
+    <ng-template pTemplate="header">
+      <div class="login-head">
+        <i class="pi pi-shield"></i>
+        <div>
+          <h2>公務人員登入</h2>
+          <p>登入後可檢視所屬縣市的家長回報、財報與風險分析</p>
+        </div>
+      </div>
+    </ng-template>
+
+    <form class="login-form" (ngSubmit)="onSubmit()">
+      <div class="field">
+        <label for="username">帳號</label>
+        <input
+          id="username"
+          type="text"
+          pInputText
+          class="w-full"
+          autocomplete="username"
+          [(ngModel)]="username"
+          name="username"
+          [disabled]="loading"
+        />
+      </div>
+
+      <div class="field">
+        <label for="password">密碼</label>
+        <p-password
+          inputId="password"
+          [(ngModel)]="password"
+          name="password"
+          [feedback]="false"
+          [toggleMask]="true"
+          styleClass="w-full"
+          inputStyleClass="w-full"
+          autocomplete="current-password"
+          [disabled]="loading"
+        ></p-password>
+      </div>
+
+      @if (errorMessage) {
+        <p-message severity="error" [text]="errorMessage"></p-message>
+      }
+
+      <p-button
+        type="submit"
+        label="登入"
+        icon="pi pi-sign-in"
+        styleClass="w-full"
+        [loading]="loading"
+      ></p-button>
+    </form>
+
+    <ng-template pTemplate="footer">
+      <p class="hint">
+        <i class="pi pi-info-circle"></i>
+        帳號由管理者建立，無法自行註冊。查詢全國幼兒園清單不需登入，
+        可直接前往<a routerLink="/kindergartens">幼兒園查詢</a>。
+      </p>
+    </ng-template>
+  </p-card>
+</div>

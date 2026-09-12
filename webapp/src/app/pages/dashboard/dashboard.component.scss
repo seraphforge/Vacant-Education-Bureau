@@ -1,0 +1,86 @@
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.title {
+  margin: 0 0 1.25rem;
+  font-size: 1.6rem;
+}
+
+.identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2.5rem;
+}
+
+.identity-main,
+.identity-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+}
+
+.label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-color-secondary);
+}
+
+.value {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.agency,
+.count {
+  font-size: 0.82rem;
+  color: var(--text-color-secondary);
+}
+
+.scope-note {
+  margin: 1rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-color-secondary);
+
+  i {
+    margin-right: 0.3rem;
+  }
+}
+
+.loading {
+  color: var(--text-color-secondary);
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.feature {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+
+  i {
+    font-size: 1.6rem;
+    color: var(--primary-color);
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 1.05rem;
+  }
+
+  p {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-color-secondary);
+    flex: 1;
+  }
+}

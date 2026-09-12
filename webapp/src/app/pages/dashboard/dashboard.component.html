@@ -1,0 +1,57 @@
+<div class="page">
+  <h1 class="title">審查作業平臺</h1>
+
+  @if (errorMessage) {
+    <p-message severity="error" [text]="errorMessage" styleClass="mb-3"></p-message>
+  }
+
+  @if (me) {
+    <p-card styleClass="mb-3">
+      <div class="identity">
+        <div class="identity-main">
+          <span class="label">登入身分</span>
+          <span class="value">{{ me.username }}</span>
+          @if (me.agency) {
+            <span class="agency">{{ me.agency }}</span>
+          }
+        </div>
+        <div class="identity-scope">
+          <span class="label">資料檢視範圍</span>
+          <p-tag
+            [value]="me.scope"
+            [severity]="me.isAdmin ? 'warning' : 'success'"
+            [icon]="me.isAdmin ? 'pi pi-globe' : 'pi pi-map-marker'"
+          ></p-tag>
+          @if (scopedTotal !== null) {
+            <span class="count">範圍內 {{ scopedTotal }} 所幼兒園</span>
+          }
+        </div>
+      </div>
+      <p class="scope-note">
+        <i class="pi pi-lock"></i>
+        範圍由後端依你的帳號屬性決定，即使修改網址參數也無法檢視其他縣市的資料。
+      </p>
+    </p-card>
+  } @else if (loading) {
+    <p class="loading"><i class="pi pi-spin pi-spinner"></i> 載入中…</p>
+  }
+
+  <div class="features">
+    @for (f of features; track f.title) {
+      <p-card styleClass="feature-card">
+        <div class="feature">
+          <i [class]="f.icon"></i>
+          <h3>{{ f.title }}</h3>
+          <p>{{ f.description }}</p>
+          <p-button
+            label="即將推出"
+            severity="secondary"
+            [text]="true"
+            [disabled]="true"
+            size="small"
+          ></p-button>
+        </div>
+      </p-card>
+    }
+  </div>
+</div>

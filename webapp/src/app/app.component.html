@@ -1,1 +1,39 @@
-<router-outlet></router-outlet>
+<header class="topbar">
+  <a class="brand" routerLink="/kindergartens">
+    <i class="pi pi-book"></i>
+    <span>README</span>
+  </a>
+
+  <nav class="nav">
+    <a routerLink="/kindergartens" routerLinkActive="active">幼兒園查詢</a>
+    @if (user()) {
+      <a routerLink="/dashboard" routerLinkActive="active">審查平臺</a>
+    }
+  </nav>
+
+  <div class="account">
+    @if (user(); as u) {
+      <span class="who">
+        <i class="pi pi-user"></i>
+        {{ u.username }}
+        <span class="scope">{{ u.isAdmin ? '全國' : u.county || '未設定縣市' }}</span>
+      </span>
+      <p-button
+        label="登出"
+        icon="pi pi-sign-out"
+        severity="secondary"
+        [text]="true"
+        size="small"
+        (onClick)="onLogout()"
+      ></p-button>
+    } @else {
+      <a class="login-link" routerLink="/login">
+        <i class="pi pi-sign-in"></i> 公務人員登入
+      </a>
+    }
+  </div>
+</header>
+
+<main>
+  <router-outlet></router-outlet>
+</main>

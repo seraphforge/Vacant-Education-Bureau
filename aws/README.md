@@ -47,12 +47,15 @@ RDS MySQL「my-mysql-db」     ← 資料庫，schema = readme，table = kinderg
 |---|---|
 | `template.yaml` | CloudFormation 模板，定義**後端 API** 資源 |
 | `web-template.yaml` | CloudFormation 模板，定義**前端網站託管**資源（S3 + CloudFront） |
+| `auth-template.yaml` | CloudFormation 模板，定義**登入**資源（Cognito User Pool） |
 | `src/app.py` | Lambda 主程式（路由 + SQL 查詢） |
 | `src/requirements.txt` | Lambda 依賴（只有 PyMySQL，純 Python 不需編譯） |
 | `build_zip.py` | 把 `build/` 打包成 `lambda.zip` |
 | `local_test.py` | 本機測試 handler（開 SSH tunnel 連 RDS，不用部署） |
 | `deploy.ps1` | 一鍵部署**後端** |
 | `deploy-web.ps1` | 一鍵部署**前端**（build + 上傳 + 清快取） |
+| `deploy-auth.ps1` | 一鍵部署**登入**（Cognito User Pool） |
+| `create-user.ps1` | 手動建立一個公務人員帳號 |
 | `deploy.config.ps1` | 你的設定與**資料庫密碼**（已 gitignore，不會進版控） |
 | `deploy.config.example.ps1` | 給隊友抄的範本 |
 
@@ -62,6 +65,7 @@ RDS MySQL「my-mysql-db」     ← 資料庫，schema = readme，table = kinderg
 |---|---|
 | `ntpc-kg-api` | Lambda、API Gateway、Security Group、IAM Role |
 | `ntpc-kg-api-web` | S3 網站 bucket、CloudFront distribution |
+| `ntpc-kg-api-auth` | Cognito User Pool、App Client、admin 群組 |
 
 ## 前端託管（Live Demo）
 
@@ -139,12 +143,14 @@ Copy-Item deploy.config.example.ps1 deploy.config.ps1   # 然後填入 DbPasswor
 Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 `https://e86tz73y7h.execute-api.us-east-1.amazonaws.com`）。
 
-| Method | Path | 說明 |
-|---|---|---|
-| GET | `/api/health` | 健康檢查，會真的 ping 一次 DB。回 `{"ok":true,"total":74628}` |
-| GET | `/api/counties` | 縣市清單（已把 `[01]` 這種前綴去掉並合併同名縣市） |
-| GET | `/api/academic-years` | 學年度清單（114 → 104） |
-| GET | `/api/kindergartens` | 主查詢 |
+| Method | Path | 登入 | 說明 |
+|---|---|---|---|
+| GET | `/api/health` | 免 | 健康檢查，會真的 ping 一次 DB。回 `{"ok":true,"total":74628}` |
+| GET | `/api/counties` | 免 | 縣市清單（22 組） |
+| GET | `/api/academic-years` | 免 | 學年度清單（114 → 104） |
+| GET | `/api/kindergartens` | 免 | 主查詢 |
+| GET | `/api/secure/me` | **要** | 我是誰 / 我能看哪個範圍 |
+| GET | `/api/secure/kindergartens` | **要** | 同主查詢，但縣市鎖在權限範圍內 |
 
 `/api/kindergartens` 的查詢參數：
 
@@ -190,6 +196,91 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 - 每所幼兒園**每個學年度都有一列**（104～114 共 11 個學年度、74,628 列）。
   所以查詢一定要帶學年度，否則同一間學校會出現 11 次。預設用最新學年度。
 
+## 登入機制（Cognito）
+
+給公務人員用的帳號驗證。**幼兒園查詢（`/api/kindergartens`）維持公開，不需登入**；
+只有 `/api/secure/*` 這些新功能要驗證。
+
+```
+Angular 登入 ──→ Cognito User Pool ──→ 取得 ID token（內含 custom:county）
+                                                │
+Angular 呼叫 API 時帶 Authorization: Bearer ────┘
+        ▼
+API Gateway JWT Authorizer   ← 驗簽章 / 驗過期，不通過直接 401（Lambda 不會被叫到）
+        ▼
+Lambda：從已驗證的 claims 取 county，強制加進 WHERE
+        ▼
+RDS
+```
+
+### 為什麼用 API Gateway 內建的 JWT Authorizer
+
+因為我們的 Lambda 在**沒有 NAT 的 VPC 裡，連不到外網**。
+如果要在 Lambda 內自己驗 JWT，得去下載 Cognito 的 JWKS 公鑰 —— 會連不出去，
+得多開一個 NAT Gateway（要錢）。交給 API Gateway 驗就完全避開這個問題，
+而且 Lambda 收到的 claims 是保證驗過的，可以直接信任。
+
+### 權限模型
+
+| 帳號類型 | 設定 | 可見範圍 |
+|---|---|---|
+| 縣市人員 | `custom:county = 新北市` | 只有新北市 |
+| 主管機關 | 加入 `admin` 群組 | 全國，也可指定單一縣市檢視 |
+
+關鍵在 `app.py` 的 `scoped_county()`：**一般人員送來的 `county` 參數會被完全忽略**，
+一律用 token 裡的值。所以改網址、改 DevTools 都拿不到別的縣市資料。
+前端的 route guard 只是介面體驗，不是安全機制。
+
+### 建立帳號
+
+帳號無法自行註冊（`AllowAdminCreateUserOnly = true`），一律由管理者建立：
+
+```powershell
+cd aws
+.\deploy-auth.ps1                                          # 第一次：建立 User Pool
+
+.\create-user.ps1 -Username ntpc_staff -County 新北市 -Agency "新北市政府教育局"
+.\create-user.ps1 -Username moe_admin  -Admin -Agency "教育部"   # 看全國
+```
+
+沒帶 `-Password` 會自動產一組並印出來。腳本會用 `--permanent` 設定密碼，
+避免首次登入卡在 `NEW_PASSWORD_REQUIRED` 挑戰。
+
+建好 User Pool 後要重跑一次 `.\deploy.ps1`，API 才會掛上 authorizer
+（`deploy.ps1` 會自動偵測 auth stack 是否存在，輸出的 `AuthEnabled` 會變成 `yes`）。
+
+### 三個踩過的坑
+
+**1. custom attribute 是一次性決定的。** Cognito 的自訂屬性建立後不能改名、不能刪除，
+而修改 `auth-template.yaml` 的 `Schema` 會**替換整個 User Pool、所有帳號消失**。
+目前開了 `custom:county` 和 `custom:agency`，要加欄位前先想清楚。
+相對地「群組」隨時可以加，所以角色類的需求優先用群組。
+
+**2. 一定要用 ID token，不能用 access token。**
+`custom:county` 只會出現在 ID token 裡，access token 沒有。
+模板裡 authorizer 的 `Audience` 設成 app client id，效果剛好是只接受 ID token。
+
+**3. 受保護路由不能用 `ANY`。**
+`ANY /api/secure/{proxy+}` 會連瀏覽器的 CORS 預檢（`OPTIONS`）一起吃掉，
+而預檢請求不帶 Authorization header，會被 authorizer 判 401，
+結果所有跨網域呼叫全部失敗。所以要改成明列 `GET` / `POST` / `PUT` / `DELETE`，
+把 `OPTIONS` 留給 API Gateway 的 `CorsConfiguration` 自動回應。
+
+### 新增受保護功能的作法
+
+`app.py` 裡照 `handle_secure_kindergartens()` 的樣子寫：
+
+```python
+def handle_secure_reports(cur, qs, identity):
+    county = scoped_county(identity, qs.get("county", ""))
+    if county is None and not identity["isAdmin"]:
+        return respond(403, {"message": "此帳號未設定縣市"})
+    # 之後把 county 加進 WHERE 即可
+```
+
+然後在 `handler()` 的 `/api/secure/` 區塊加一行路由。前端加在
+`SecureApiService` 並掛到 `/dashboard` 底下的子路由。
+
 ## 本機測試（不用部署）
 
 改完 `src/app.py` 後，可以先在本機驗證再部署：
@@ -227,6 +318,9 @@ aws cloudformation delete-stack --stack-name ntpc-kg-api-web --region us-east-1
 
 # 後端
 aws cloudformation delete-stack --stack-name ntpc-kg-api --region us-east-1
+
+# 登入（注意：會連帳號一起刪掉）
+aws cloudformation delete-stack --stack-name ntpc-kg-api-auth --region us-east-1
 ```
 
 （RDS 不在這些 stack 裡，不會被刪。Lambda 程式碼的 artifact bucket
@@ -240,11 +334,14 @@ aws cloudformation delete-stack --stack-name ntpc-kg-api --region us-east-1
    方便但不理想。正式做法是放 Secrets Manager，或改用 RDS IAM 認證。
    注意：Lambda 在沒有 NAT 的 VPC 裡要讀 Secrets Manager，需要額外開
    Interface VPC Endpoint（要收費）。
-2. **API 沒有任何身分驗證，任何人拿到網址都能查。** 目前資料是公開資料所以可接受；
-   之後若加入財報、家長回報等非公開資料，必須加上 Cognito 或 Lambda Authorizer。
-3. **CORS 開放 `*`。** 現在同時要讓 CloudFront 網址和本機 `localhost:4200` 都能呼叫，
+2. **公開端點沒有任何身分驗證，任何人拿到網址都能查。** `/api/kindergartens`
+   是刻意公開的（教育部公開資料，且要給評審直接看）。非公開資料一律放
+   `/api/secure/*`。
+3. **公開端點沒有速率限制。** 可以在 API Gateway 加 throttling 或 usage plan。
+4. **CORS 開放 `*`。** 現在同時要讓 CloudFront 網址和本機 `localhost:4200` 都能呼叫，
    所以先開放。正式上線應改成只允許 CloudFront 網域。
-4. **每個 Lambda 冷啟動都要重連 MySQL。** 流量大時可考慮 RDS Proxy 管理連線池。
-5. **沒有自訂網域。** 目前用 `*.cloudfront.net`。若要 `xxx.example.com`，
+5. **每個 Lambda 冷啟動都要重連 MySQL。** 流量大時可考慮 RDS Proxy 管理連線池。
+6. **沒有自訂網域。** 目前用 `*.cloudfront.net`。若要 `xxx.example.com`，
    需要 Route 53 + ACM 憑證（憑證必須簽在 us-east-1，剛好我們就在這個 region）。
+7. **Cognito 沒有開 MFA、也沒有密碼過期政策。** 正式給公務機關用應該補上。
 

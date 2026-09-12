@@ -2,9 +2,16 @@
 幼兒園查詢 API — 單一 Lambda 處理所有路由（HTTP API payload v2.0）。
 
 路由：
+
+公開（不需登入）：
   GET /api/health                 健康檢查（會實際 ping DB）
-  GET /api/counties               縣市清單（去掉 "[01]" 前綴後去重）
+  GET /api/counties               縣市清單
+  GET /api/academic-years         學年度清單
   GET /api/kindergartens          查詢清單（縣市 + 名稱 LIKE + 分頁）
+
+需登入（Cognito ID token，API Gateway 已先驗過簽章與過期）：
+  GET /api/secure/me              我是誰 / 我能看哪個範圍
+  GET /api/secure/kindergartens   同上查詢，但縣市鎖在使用者權限內
 
 /api/kindergartens 支援的 query string：
   county        縣市名稱，例如 新北市（可省略 = 全部）
@@ -83,6 +90,56 @@ def to_int(value, default, lo, hi):
     return max(lo, min(hi, n))
 
 
+# ---------------------------------------------------------------------------
+# 認證
+#
+# /api/secure/* 這些路由在 API Gateway 就掛了 JWT authorizer，
+# 所以進到這裡的 event 一定已經通過簽章與過期驗證，claims 可以直接信任。
+# 公開路由（/api/kindergartens 等）不會有 claims。
+# ---------------------------------------------------------------------------
+def get_claims(event):
+    """取出已驗證的 JWT claims；公開路由回 {}。"""
+    return (
+        event.get("requestContext", {})
+        .get("authorizer", {})
+        .get("jwt", {})
+        .get("claims", {})
+    )
+
+
+def get_identity(event):
+    """把 claims 整理成好用的形式。"""
+    claims = get_claims(event)
+    if not claims:
+        return None
+
+    # cognito:groups 在 claims 裡可能是 list，也可能是 "[admin]" 這種字串
+    raw_groups = claims.get("cognito:groups") or []
+    if isinstance(raw_groups, str):
+        raw_groups = [g for g in re.split(r"[\[\]\s,]+", raw_groups) if g]
+
+    return {
+        "username": claims.get("cognito:username") or claims.get("sub"),
+        "county": (claims.get("custom:county") or "").strip(),
+        "agency": (claims.get("custom:agency") or "").strip(),
+        "groups": raw_groups,
+        "isAdmin": "admin" in raw_groups,
+    }
+
+
+def scoped_county(identity, requested=""):
+    """回傳這個使用者實際可以查的縣市。
+
+    - admin 群組：可查全國（回 None 代表不加縣市條件），
+      也可以指定某個縣市來檢視。
+    - 一般人員：一律鎖回自己的 custom:county，
+      **完全忽略前端送來的值**，否則改個網址就能看別的縣市。
+    """
+    if identity["isAdmin"]:
+        return (requested or "").strip() or None
+    return identity["county"] or None
+
+
 def latest_academic_year(cur):
     cur.execute("SELECT MAX(CAST(academic_year AS UNSIGNED)) AS y FROM kindergarten")
     row = cur.fetchone()
@@ -113,8 +170,13 @@ def handle_academic_years(cur):
     return respond(200, {"items": cur.fetchall()})
 
 
-def handle_kindergartens(cur, qs):
-    county = (qs.get("county") or "").strip()
+def handle_kindergartens(cur, qs, force_county=None):
+    """查詢幼兒園清單。
+
+    force_county 不是 None 時，縣市條件一律用它，忽略 query string，
+    這是給 /api/secure/* 做資料範圍控管用的。
+    """
+    county = (qs.get("county") or "").strip() if force_county is None else force_county
     name = (qs.get("name") or "").strip()
     ownership = (qs.get("ownership") or "").strip()
     year = (qs.get("academicYear") or "").strip()
@@ -169,8 +231,44 @@ def handle_kindergartens(cur, qs):
             "page": page,
             "pageSize": page_size,
             "academicYear": year,
+            # 實際生效的縣市範圍（受保護端點會是使用者被鎖定的縣市）
+            "county": county or None,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 受保護端點（/api/secure/*）
+#
+# 目前只放「確認登入與權限範圍」用的兩支，
+# 家長回報 / 財報 / 風險分析的實作照 handle_secure_kindergartens 的樣子加即可：
+# 從 identity 拿到 county，用 scoped_county() 決定範圍，再進 SQL。
+# ---------------------------------------------------------------------------
+def handle_secure_me(identity):
+    """回傳「我是誰、我能看哪個範圍」，前端登入後用來顯示身分。"""
+    return respond(
+        200,
+        {
+            "username": identity["username"],
+            "county": identity["county"] or None,
+            "agency": identity["agency"] or None,
+            "groups": identity["groups"],
+            "isAdmin": identity["isAdmin"],
+            "scope": "全國" if identity["isAdmin"] else (identity["county"] or "未設定縣市"),
+        },
+    )
+
+
+def handle_secure_kindergartens(cur, qs, identity):
+    """跟公開的查詢同一份資料，但縣市被鎖在使用者權限內。
+
+    這支的用途是示範 row-level 範圍控管怎麼做，
+    之後家長回報 / 財報 / 風險分析都照這個模式寫。
+    """
+    county = scoped_county(identity, qs.get("county", ""))
+    if county is None and not identity["isAdmin"]:
+        return respond(403, {"message": "這個帳號沒有設定縣市（custom:county），請聯絡管理者"})
+    return handle_kindergartens(cur, qs, force_county=county or "")
 
 
 def handler(event, context):
@@ -186,6 +284,7 @@ def handler(event, context):
     try:
         conn = get_conn()
         with conn.cursor() as cur:
+            # ---- 公開端點 ----
             if path in ("/", "/api", "/api/health"):
                 return handle_health(cur)
             if path == "/api/counties":
@@ -194,6 +293,19 @@ def handler(event, context):
                 return handle_academic_years(cur)
             if path == "/api/kindergartens":
                 return handle_kindergartens(cur, qs)
+
+            # ---- 受保護端點：token 已由 API Gateway 驗過 ----
+            if path.startswith("/api/secure/"):
+                identity = get_identity(event)
+                if identity is None:
+                    # 正常情況不會走到這（API Gateway 會先回 401）；
+                    # 除非有人把 route 的 authorizer 拿掉了。
+                    return respond(401, {"message": "需要登入"})
+                if path == "/api/secure/me":
+                    return handle_secure_me(identity)
+                if path == "/api/secure/kindergartens":
+                    return handle_secure_kindergartens(cur, qs, identity)
+
         return respond(404, {"message": f"Not found: {method} {path}"})
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR {type(exc).__name__}: {exc}")
