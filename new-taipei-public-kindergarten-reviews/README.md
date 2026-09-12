@@ -1,105 +1,268 @@
-<h1 align="center">README!!!</h1>
+# New Taipei Public Kindergarten Google Review Intelligence Pipeline
 
-![README!!!](assets/banner.png)
+A production-grade data pipeline for collecting, validating, and analyzing
+Google Maps reviews of **New Taipei City (新北市) public kindergartens**.
 
-## 簡介
+## Project Purpose
 
-現行教保機構風險評估方案多仰賴人力，且缺乏各項資訊的交叉比對與整合，導致評估效率與完整性較低。針對以上困境，我們欲利用 AI Agent 自動、彙整各項公開資料（其中包括Google Map 評論在內等網路輿論），並與政府內部資料如財報等，整合至單一平臺，方便審查與分析。同時於平臺串接 AI 模型，藉由交叉對比不同學校、追蹤各學校財報的年度變化等方法，綜合所有資料並自動分析教育機構的各類風險指數。最終以可視化方式清楚、簡潔的呈現結果。除此之外，我們亦將在其中加入家長回報系統，藉由這些第一手資料提升準確度與預測效率。
+Build a clean, auditable dataset of Google Maps reviews for all New Taipei City
+public kindergartens, suitable for NLP analysis, sentiment scoring, and risk detection.
 
-- 作品簡報：*pending*
-- 線上 Demo：**https://d17mx0mlb8rctm.cloudfront.net**
+**Core principle: government data determines public status. Google Maps is only used for Place matching and review collection.**
 
-## 技術棧
+---
 
-- 前端：Angular 18, PrimeNG 17（`webapp/`）
-- 後端：AWS Serverless — API Gateway (HTTP API) + Lambda (Python 3.12) + CloudFormation（`aws/`）
-- 前端託管：S3 + CloudFront（全 serverless，無需維護伺服器）
-- 資料庫：Amazon RDS for MySQL 8.4（schema `readme`）
-- AI：*pending*
-
-## 系統架構
+## Architecture
 
 ```
-                    使用者瀏覽器
-                    │            │
-        靜態檔案     │            │  API 呼叫 (JSON)
-                    ▼            ▼
-            CloudFront        API Gateway (HTTP API)
-                 │                    │
-                 ▼                    ▼
-        S3「ntpc-kg-web」      Lambda「ntpc-kg-api」
-        (Angular 建置產物)      (Python + PyMySQL，位於 RDS 的 VPC 內)
-                                      │  MySQL 3306
-                                      ▼
-                            RDS MySQL「my-mysql-db」
-                            readme.kindergarten
-                            (104～114 學年度，74,628 列)
+Government Open Data
+         |
+         v
+Official Kindergarten Master Dataset (kindergartens table)
+         |
+         v
+Validation (analysis/public_kindergarten_validator.py)
+    -- city == New Taipei City?
+    -- public_type IN (public, public_attached)?
+         |
+         v
+Google Place Matching (collectors/google_places.py)
+    -- name similarity
+    -- address similarity
+    -- geo distance
+    -- match score >= 0.85 → AUTO_ACCEPTED
+         |
+         v
+Google Place Metadata (google_places table)
+         |
+         v
+Google Review Sample (reviews table)
+    -- SHA-256 deduplication
+    -- partial dataset (API limitation)
+         |
+         v
+NLP / Risk Analysis
 ```
 
-全部 AWS 資源都由 CloudFormation 定義（`aws/template.yaml`、`aws/web-template.yaml`），
-可重建、可交接、可一次刪除。
+---
 
-## 快速開始
-
-```powershell
-# 1) 部署後端 API（第一次要先複製 deploy.config.example.ps1 成 deploy.config.ps1 並填密碼）
-cd aws
-.\deploy.ps1          # 完成後會印出 ApiUrl
-
-# 2) 部署前端到 AWS（S3 + CloudFront）
-.\deploy-web.ps1      # 完成後會印出 live demo 網址
-
-# 或 2') 只在本機開發前端
-cd ..\webapp
-npm install
-npm start             # http://localhost:4200
-```
-
-細節說明：
-
-- 後端與部署：[`aws/README.md`](aws/README.md)
-- 前端：[`webapp/README.md`](webapp/README.md)
-
-## 目前完成度
-
-- [x] 幼兒園清單查詢 API（縣市 / 名稱 LIKE / 公私立 / 分頁 / 排序）
-- [x] Angular + PrimeNG 查詢畫面（伺服器端分頁）
-- [x] 前後端皆部署於 AWS，具備可公開存取的 live demo
-- [x] 幼兒園裁罰紀錄爬取與查詢 API（新北市，`kindergarten_punishment` 表，外鍵串回 `kindergarten`）
-- [ ] 財報、Google Map 評論等資料源整合
-- [ ] AI 風險指數分析
-- [ ] 家長回報系統
-
-## 財報風險偵測項目
-
-財報資料清理後，將針對下列項目進行異常分析：
-
-- 人事費異常
-- 業務費異常
-- 修繕／採購費突然暴增
-- 業務發展費異常
-- 其他支出異常
-- 預算與決算落差
-- 年度支出突然大幅變化
-
-PDF 抽取階段先保留人事費、業務費、修繕及採購費、業務發展費、其他支出、預算總額與決算總額等原始欄位。異常判定則需要搭配同一幼兒園的多年度資料，計算年度變化率、預算執行率與各支出項目占比，避免只依單一年度金額誤判。
-
-## 本機 OCR 模式
-
-不使用 Gemini 或 OpenAI 時，可用 Tesseract OCR 處理所有 PDF 的第 5、6 頁：
+## Installation
 
 ```bash
-python data/finance_pdf_cleaning/scripts/extract_financial_reports.py --ocr
+# Python 3.11+ required
+pip install -r requirements.txt
+
+# Copy and fill in environment variables
+cp .env.example .env
+# Edit .env: add GOOGLE_MAPS_API_KEY
 ```
 
-OCR 結果會依學年度／幼兒園輸出為 `*_page5_ocr.csv` 與 `*_page6_ocr.csv`。腳本會使用 `chi_tra+eng` 辨識繁體中文與數字，需自行準備 `tessdata/chi_tra.traineddata`（未納入版控）；若 Tesseract 安裝在非預設路徑，可設定 `TESSERACT_CMD`。
+---
 
-## 貢獻者
+## Google Places API Setup
 
-<a href="https://github.com/seraphforge/Vacant-Education-Bureau/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=seraphforge/Vacant-Education-Bureau" />
-</a>
+1. Go to https://console.cloud.google.com/apis/credentials
+2. Create a project
+3. Enable **Places API (New)**
+4. Create an API Key
+5. Add key to `.env`:
+   ```
+   GOOGLE_MAPS_API_KEY=your_key_here
+   ```
 
-Made with [contrib.rocks](https://contrib.rocks).
+---
 
-## 授權條款
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GOOGLE_MAPS_API_KEY` | For steps 6-7 | - | Google Places API (New) key |
+| `DATABASE_URL` | No | SQLite | Override DB (e.g. PostgreSQL) |
+| `GOOGLE_REQUEST_DELAY` | No | 0.5 | Seconds between API calls |
+| `GOOGLE_MAX_RETRIES` | No | 5 | Max retry attempts |
+| `GOOGLE_TIMEOUT` | No | 30 | HTTP timeout (seconds) |
+| `LOG_LEVEL` | No | INFO | Logging level |
+
+---
+
+## Database Schema
+
+### kindergartens
+Primary master table. Source of truth for public status.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER | Primary key |
+| official_name | TEXT | Full official name from government data |
+| school_name | TEXT | Parent school name (for attached KGs) |
+| public_type | ENUM | public / public_attached / private / ... |
+| is_public | BOOLEAN | **Determined by govt data only. Never from Google.** |
+| district | TEXT | Administrative district (行政區) |
+| address | TEXT | Official address |
+| google_match_status | ENUM | unmatched / auto_accepted / needs_review / rejected |
+| google_match_score | FLOAT | 0.0-1.0 matching confidence |
+| place_fetch_status | ENUM | pending / running / success / failed |
+| review_fetch_status | ENUM | pending / running / success / failed |
+
+### google_places
+Google Place metadata. One row per matched kindergarten.
+
+### reviews
+Google reviews collected via Places API (New).
+
+**Important**: `google_review_count` (from Place) ≠ `collected_review_count` (our DB).
+The Places API returns a limited subset of reviews. See "Known Limitations" below.
+
+### rejected_kindergartens
+Audit log of all records excluded from the pipeline, with reason codes.
+
+---
+
+## CLI Commands
+
+```bash
+# STEP 3: Import official data (seed data or CSV)
+python main.py import-kindergartens
+python main.py import-kindergartens --csv-file data/public_kindergartens.csv
+python main.py import-kindergartens --try-moe-api
+
+# STEP 4: Validate (filter to NTC public only)
+python main.py validate-kindergartens
+
+# STEP 5: Check pipeline status
+python main.py status
+
+# STEP 6: Google Place matching (requires API key)
+python main.py match-places
+python main.py match-places --limit 20
+
+# STEP 7: Fetch metadata and reviews (requires API key)
+python main.py fetch-reviews
+python main.py fetch-reviews --limit 20
+python main.py fetch-reviews --district Banqiao
+
+# Retry failed operations
+python main.py retry-failed
+
+# Export data
+python main.py export
+```
+
+---
+
+## Public Kindergarten Filtering Logic
+
+Public status is determined **exclusively** from government source data fields:
+
+| Source field value | Normalized type | is_public |
+|-------------------|-----------------|-----------|
+| 公立, 市立, 區立, 國立 | PUBLIC | **TRUE** |
+| 公立附設, 國民小學附設 | PUBLIC_ATTACHED | **TRUE** |
+| 私立 | PRIVATE | FALSE |
+| 準公共 | QUASI_PUBLIC | FALSE |
+| 非營利 | NONPROFIT | FALSE |
+| 公設民營 | PUBLIC_PRIVATE_PARTNERSHIP | FALSE |
+| (empty or unknown) | UNKNOWN | FALSE (needs_review) |
+
+**Google Maps is never consulted for public/private determination.**
+
+---
+
+## Google Place Matching Logic
+
+```
+score = name_similarity * 0.50
+      + address_similarity * 0.30
+      + geo_similarity * 0.20
+```
+
+Using `rapidfuzz` for string similarity.
+
+| Score | Status |
+|-------|--------|
+| >= 0.85 | AUTO_ACCEPTED |
+| 0.70 - 0.85 | NEEDS_REVIEW |
+| < 0.70 | REJECTED |
+
+Manual overrides: edit `config/place_overrides.csv`.
+
+---
+
+## Review Collection Limitation
+
+> **Google Places API (New) currently returns only a limited subset of reviews for a Place.**
+>
+> Therefore the collected review dataset must not be interpreted as the complete historical Google Maps review corpus.
+
+The database explicitly tracks:
+- `google_review_count` — total reviews shown on Google Maps (from Place metadata)
+- `collected_review_count` — actual rows we collected via API
+
+These two values will differ significantly for popular places.
+
+---
+
+## Data Export
+
+```
+exports/
+├── public_kindergartens.csv
+├── google_places.csv
+├── reviews.csv
+├── review_stats.csv
+├── rejected_kindergartens.csv
+├── manual_review_places.csv
+└── reviews.jsonl    # one review per line
+```
+
+---
+
+## Raw Data Storage
+
+All API responses are stored as-is for debugging:
+
+```
+data/raw/google_places/YYYY-MM-DD/place_<place_id>.json
+```
+
+---
+
+## Seed Data
+
+The built-in seed covers ~116 New Taipei City public kindergartens across
+all 29 administrative districts, curated from the official government source:
+https://www.ece.moe.edu.tw/ch/query-preschool/
+
+To use a fresh government CSV:
+```bash
+python main.py import-kindergartens --csv-file /path/to/moe_kindergartens.csv
+```
+
+---
+
+## Known Limitations
+
+1. **Review coverage**: Places API (New) returns ~5 reviews per Place. Not the full corpus.
+2. **Seed data staleness**: The built-in seed may miss newly established kindergartens. Import fresh CSV for current data.
+3. **Place matching edge cases**: Some attached kindergartens (國小附設) may match the primary school's Place, not a separate Place entry. Use `config/place_overrides.csv` to correct.
+4. **Rate limits**: Google Places API has per-day quotas. Use `--limit` to batch operations.
+
+---
+
+## Running Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+44 tests covering:
+- Public type normalization
+- Private/quasi-public/nonprofit rejection
+- Not-New-Taipei-City rejection
+- Missing address rejection
+- Address district extraction
+- Review SHA-256 deduplication
+- Repository upsert and resume behavior
+- Validator batch processing and CSV output
+- Seed data integrity
+- Full import → validate pipeline
