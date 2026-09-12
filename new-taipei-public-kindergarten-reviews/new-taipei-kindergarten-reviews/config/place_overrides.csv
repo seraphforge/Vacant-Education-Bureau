@@ -1,0 +1,4 @@
+kindergarten_id,google_place_id,status,note
+# Example:
+# 1,ChIJxxxxxxxxxxxxxxxx,accepted,Manual override - confirmed by map inspection
+# 2,ChIJyyyyyyyyyyyyyyyy,rejected,Wrong place - this is the primary school not the kindergarten

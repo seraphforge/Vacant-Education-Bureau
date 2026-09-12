@@ -1,0 +1,91 @@
+<div class="track">
+  <app-header></app-header>
+
+  <main class="track__main">
+    @if (data(); as d) {
+      <div class="track__card">
+        <div class="track__head">
+          <div>
+            <span class="track__caseno">案號 {{ d.caseNo }}</span>
+            <h2 class="track__school">{{ d.schoolName }}</h2>
+          </div>
+          <span class="track__status" [class.track__status--rejected]="isRejected()">
+            {{ d.statusLabel }}
+          </span>
+        </div>
+        <p class="track__submitted">回報時間：{{ formatTaipei(d.submittedAt) }}</p>
+
+        <!-- 進度節點：圓形 stepper -->
+        <ol class="stepper" [class.stepper--rejected]="isRejected()">
+          @for (step of d.steps; track step.key; let last = $last) {
+            <li class="stepper__item" [attr.data-state]="step.state">
+              <div class="stepper__node">
+                @if (step.state === 'done') {
+                  <i class="pi pi-check"></i>
+                } @else {
+                  <span class="stepper__dot"></span>
+                }
+              </div>
+              <span class="stepper__label">{{ step.label }}</span>
+              @if (!last) {
+                <span class="stepper__line" [attr.data-state]="step.state"></span>
+              }
+            </li>
+          }
+        </ol>
+
+        @if (d.statusReason) {
+          <div class="track__reason">
+            <strong>說明：</strong>{{ d.statusReason }}
+          </div>
+        }
+
+        <!-- 承辦回覆訊息 -->
+        @if (d.messages.length > 0) {
+          <section class="track__messages">
+            <h3>案件回覆</h3>
+            @for (m of d.messages; track m.createdAt) {
+              <div class="msg">
+                <div class="msg__meta">
+                  <span class="msg__author">{{ m.authorDisplay }}</span>
+                  <span class="msg__time">{{ formatTaipei(m.createdAt) }}</span>
+                </div>
+                <p class="msg__body">{{ m.body }}</p>
+              </div>
+            }
+          </section>
+        }
+
+        <!-- 附件 -->
+        @if (d.attachments.length > 0) {
+          <section class="track__attachments">
+            <h3>附件</h3>
+            <div class="attach-grid">
+              @for (a of d.attachments; track a.id) {
+                <a class="attach" [href]="a.url" target="_blank" rel="noopener noreferrer">
+                  @if (a.contentType.startsWith('image/')) {
+                    <img [src]="a.url" [alt]="a.fileName" loading="lazy" />
+                  } @else {
+                    <i class="pi pi-file"></i>
+                  }
+                  <span class="attach__name">{{ a.fileName }}</span>
+                </a>
+              }
+            </div>
+          </section>
+        }
+      </div>
+    } @else if (loading()) {
+      <div class="track__center">
+        <p-progressSpinner strokeWidth="4" [style]="{ width: '48px', height: '48px' }"></p-progressSpinner>
+        <p>載入中…</p>
+      </div>
+    } @else if (notFound()) {
+      <div class="track__center track__notfound">
+        <i class="pi pi-exclamation-triangle"></i>
+        <h2>找不到這筆回報</h2>
+        <p>連結可能有誤或已失效，請確認網址是否正確。</p>
+      </div>
+    }
+  </main>
+</div>

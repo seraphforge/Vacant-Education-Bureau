@@ -300,7 +300,7 @@ Response `200`：
   "statusLabel": "調查中",
   "statusReason": null,              // 「不受理」時為理由文字，其餘多為 null
   "steps": [
-    { "key": "submitted",     "label": "已報報",   "state": "done" },
+    { "key": "submitted",     "label": "已通報",   "state": "done" },
     { "key": "investigating", "label": "調查中",   "state": "current" },
     { "key": "closed",        "label": "調查完畢", "state": "pending" }
   ],
@@ -318,8 +318,8 @@ Response `200`：
 
 **`steps` 是後端算好的完整節點集合，前端不要自己推導狀態機**：
 
-- 一般案件回 3 個節點：`已報報` → `調查中` → `調查完畢`
-- 被標記不受理時，回 **2 個節點**：`已報報`(done) → `不受理`(current)，後續節點不出現
+- 一般案件回 3 個節點：`已通報` → `調查中` → `調查完畢`
+- 被標記不受理時，回 **2 個節點**：`已通報`(done) → `不受理`(current)，後續節點不出現
 
 `state` 只有三種：`done`（已完成，上色）、`current`（當前，上色＋強調）、`pending`（未進行，淺灰）。這一併解掉 UI_SPEC §7「不受理節點位置」的待確認項。
 
@@ -388,7 +388,7 @@ Response `200`：
       "id": 57,
       "caseNo": "R2509-000057",
       "status": "submitted",
-      "statusLabel": "已報報",
+      "statusLabel": "已通報",
       "createdAt": "2026-09-12T13:25:00Z",
       "kindergartenId": 1234,
       "schoolName": "新北市私立○○幼兒園",
@@ -633,7 +633,7 @@ UI_SPEC Tab 3 要求的欄位是「文字內容 / 來源 / 日期」，這裡另
 
 | `status` | `statusLabel` | 說明 |
 |---|---|---|
-| `submitted` | 已報報 | 驗證完成、已進政府端 |
+| `submitted` | 已通報 | 驗證完成、已進政府端 |
 | `investigating` | 調查中 | |
 | `closed` | 調查完畢 | 終態 |
 | `rejected` | 不受理 | 終態，`statusReason` 必有值 |

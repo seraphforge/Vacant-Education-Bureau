@@ -97,7 +97,7 @@
 - [x] 建立 `ReportTrackingComponent`，依 URL 上的 `<TOKEN>` 取得回報狀態資料
 - [x] 以一系列圓形節點呈現處理階段（Stepper / Timeline 樣式，可用 PrimeNG Steps 或自訂元件）
 - [x] 預設三個階段，依序為：
-  1. 已報報
+  1. 已通報
   2. 調查中
   3. 調查完畢
 - [x] 節點顯示規則：
@@ -105,8 +105,8 @@
   - [x] 尚未進行的階段：淺灰色
 - [x] 特殊階段「不受理」：
   - [x] 預設不顯示，僅在該回報被標記為「不受理」時才顯示
-  - [x] 顯示時取代原本「調查中」「調查完畢」的後續節點位置（例如：已報報 → 不受理）
-- [x] Todo：確認「不受理」節點的顯示位置規則與連接線樣式（依範例為緊接在「已報報」之後）
+  - [x] 顯示時取代原本「調查中」「調查完畢」的後續節點位置（例如：已通報 → 不受理）
+- [x] Todo：確認「不受理」節點的顯示位置規則與連接線樣式（依範例為緊接在「已通報」之後）
   - 已解決：`steps` 由後端算好（API_SPEC §3），前端直接依 `state`（done/current/pending）上色，不自行推導。
 
 ---
@@ -132,7 +132,15 @@
 - [x] 套用共用 `HeaderComponent` 之登入版（含登出按鈕 `[->`）
 - [x] 登出按鈕：清除 Cognito Session，導回 `/admin`
 
-#### 6.2.1 資料表格
+#### 6.2.0 頁面結構：兩個平行的頂層 Tab
+
+- [x] Header 底下用 **PrimeNG `TabView`** 分成兩個**平行、獨立**的功能區塊：
+  1. **學校統整**（Tab 1，預設開啟）— 學校資料表格 + 詳細資料浮動面板（見 §6.2.1、§6.3）
+  2. **案件處理**（Tab 2）— 全縣市家長回報案件總覽與處理（見 §6.2.2、§6.4）
+- [x] 兩個 Tab 互不隸屬：「案件處理」是**全縣市案件總覽**，不綁定任何一間學校；不再放在學校列表列上或學校詳細資料裡。
+- [x] `AdminDashboardComponent` 作為外殼（Header + TabView），Tab 內容各自拆成獨立元件。
+
+#### 6.2.1 學校統整 Tab：資料表格
 
 - [x] 使用 PrimeNG Table 建立主表格
 - [x] 欄位（由左到右）：
@@ -149,8 +157,21 @@
   - [x] 風險指數 < 60：預設樣式（無特殊標記）
   - 備註：直接依後端 `risk_level`（high/medium/normal/null）上色，不在前端比大小（API_SPEC §4.2）。
 - [x] 「詳細資料」欄位為按鈕，點擊後開啟浮動面板（見 6.3）
+  - 備註：學校統整 Tab 的表格列**只有「詳細資料（風險）」一個操作**；案件處理已移到 Tab 2，不再放在此列。
 
-### 6.3 詳細資料 Tabbed Floating Panel
+#### 6.2.2 案件處理 Tab：全縣市家長回報總覽
+
+> 對應 API_SPEC §4.3～§4.7（皆已上線）。這是 **dashboard 層級的第二個 Tab**，與學校統整平行，
+> 顯示登入者權限範圍內（依 token 縣市）**全部**的家長回報案件，供行政人員標記處理進度與回覆。詳細內容見 §6.4。
+
+- [x] 建立 `CaseManagementComponent` 作為 Tab 2 的內容元件
+- [x] 進入 Tab 時呼叫 `GET /api/secure/reports`（不帶 `kindergartenId`＝全縣市）載入案件清單
+- [x] 以 PrimeNG Table 呈現案件清單，欄位：案號、學校名稱、狀態、成案時間、內容摘要、附件數、（操作：處理）
+- [x] 提供**狀態篩選**（`submitted`/`investigating`/`closed`/`rejected`，對應 §4.3 `status` 參數）
+- [x] 提供**依學校篩選**（選填）：§4.3 支援 `kindergantenId`（實為 `kindergartenId`）過濾，故加一個「限定某園」的篩選；不選則顯示全縣市
+- [x] 點「處理」開啟案件詳情與操作（沿用 §6.4 的 Drawer 設計：狀態標記 + reply/internal_note + 未儲存/已儲存）
+
+### 6.3 詳細資料 Tabbed Floating Panel（學校統整 Tab 內）
 
 - [x] 使用 PrimeNG OverlayPanel / Dialog 建立可浮動的 Tabbed 面板
 - [x] 面板內建立三個 Tab：
@@ -195,27 +216,28 @@
 - 同一園 10 分鐘內不能重跑（後端回 429），畫面顯示後端給的訊息即可。
 - 進度文字會說明「刻意放慢速度並遵守來源網站的 robots 規範」，避免使用者以為系統很慢。
 
-### 6.4 行政人員處理進度標記與回覆（家長回報案件）
+### 6.4 案件處理 Tab：處理進度標記與回覆（家長回報案件）
 
-> 對應 API_SPEC §4.3～§4.7（皆已上線）。此功能讓登入的行政人員檢視某幼兒園的家長回報案件、
-> 標記處理進度，並回覆家長或新增內部備註；家長端會在 `/report/<TOKEN>` 追蹤頁看到進度與對外回覆。
+> 對應 API_SPEC §4.3～§4.7（皆已上線）。此功能位於 dashboard 的**案件處理 Tab（§6.2.2）**，
+> 讓登入的行政人員檢視全縣市家長回報案件、標記處理進度、回覆家長或新增內部備註；
+> 家長端會在 `/report/<TOKEN>` 追蹤頁看到進度與對外回覆。
 
 #### 6.4.1 呈現方式與理由（設計決定）
 
-- [x] **不放進 §6.3 的「詳細資料」Tabbed Floating Panel**。理由：該面板呈現的是「學校整體風險資料」（風險/財報/輿情），
-      是唯讀的分析視角；而本功能是「針對單筆家長回報案件的處理作業（讀 + 寫）」，兩者資料層級（學校 vs 單一案件）
-      與互動性質（檢視 vs 操作）都不同，混在一起會讓面板職責不清。
-- [x] **採用獨立的側邊 Drawer（PrimeNG `p-sidebar`，由右側滑出）** 承載本功能。選擇 Drawer 而非另開頁面或 Dialog 的理由：
-  1. 行政人員通常是「一邊看表格、一邊處理案件」，Drawer 從側邊滑出、可快速開關，不離開 dashboard 情境。
-  2. 案件內容 + 訊息串 + 操作表單資訊量較大，Drawer 的高度可捲動空間比 Dialog 更適合。
+- [x] **提升為 dashboard 層級的第二個 Tab「案件處理」**（與學校統整平行），不再是學校列表列上的按鈕、
+      也不放進 §6.3 的「詳細資料」浮動面板。理由：§6.3 面板呈現的是「學校整體風險資料」（風險/財報/輿情），
+      是唯讀分析視角、資料層級是「一間學校」；而案件處理是「全縣市家長回報案件的處理作業（讀 + 寫）」，
+      層級是「單一案件」、且不隸屬任一學校，兩者性質不同，故獨立成 Tab。
+- [x] Tab 2 內用 **案件清單表格（§6.2.2）＋ 點「處理」開啟案件詳情與操作面板**。
+- [x] 案件詳情與操作面板沿用 **PrimeNG `p-sidebar`（右側 Drawer）** 呈現。選擇 Drawer 的理由：
+  1. 行政人員「一邊看案件清單、一邊處理」，Drawer 從側邊滑出、可快速開關，不離開清單情境。
+  2. 案件內容 + 訊息串 + 操作表單資訊量較大，Drawer 的可捲動高度比 Dialog 更適合。
   3. 與既有 PrimeNG 慣例一致，不引入新的 UI library。
-- [x] 在主表格（§6.2.1）既有「詳細資料（風險）」按鈕之外，**新增一個獨立操作按鈕「回報案件」**，點擊開啟本 Drawer。
 
-#### 6.4.2 Drawer 內容
+#### 6.4.2 案件詳情 Drawer 內容
 
-- [x] 建立 `ReportCaseDrawerComponent`
-- [x] Drawer 開啟時，依該幼兒園 `kindergartenId` 呼叫 `GET /api/secure/reports?kindergartenId=…` 取得該園的家長回報清單
-- [x] 以清單（含案號、狀態標籤、成案時間、內容摘要）呈現；點選一筆進入該案件詳情
+- [x] 由 `CaseManagementComponent`（Tab 2）在點選案件時開啟 `ReportCaseDrawerComponent`
+- [x] 案件清單來源見 §6.2.2（`GET /api/secure/reports`，可依狀態 / 學校篩選）
 - [x] 案件詳情呼叫 `GET /api/secure/reports/{id}`，顯示：
   - [x] 狀態與目前處理階段
   - [x] 回報人姓名 / email、回報內容、附件
@@ -223,8 +245,8 @@
 
 ##### A. 標記處理進度（狀態）
 
-- [x] 提供狀態選擇（對應追蹤頁四個階段）：`submitted`(已報報)、`investigating`(調查中)、`closed`(調查完畢)、`rejected`(不受理)
-  - 備註：送出的是 enum 值，顯示用後端回傳的 `statusLabel`（沿用家長端「已報報」用字）。
+- [x] 提供狀態選擇（對應追蹤頁四個階段）：`submitted`(已通報)、`investigating`(調查中)、`closed`(調查完畢)、`rejected`(不受理)
+  - 備註：送出的是 enum 值，顯示用後端回傳的 `statusLabel`（沿用家長端「已通報」用字）。
 - [x] 選 `rejected`(不受理) 時，**強制要求填寫理由** `statusReason`（對應 API_SPEC §4.7 `STATUS_REASON_REQUIRED`）
 - [x] 提供「是否 email 通知家長」開關（`notifyParent`）
 - [x] 呼叫 `PATCH /api/secure/reports/{id}` 儲存；回應為完整詳情物件，直接覆蓋畫面狀態
@@ -279,4 +301,6 @@
   - [x] `RiskAssessmentTabComponent`（風險評估 + 雷達圖）
   - [x] `FinancialReportTabComponent`（財報表格；殼，待 API）
   - [x] `PublicOpinionTabComponent`（輿情分析表格；殼，待 API）
-- [x] `ReportCaseDrawerComponent`（行政人員處理進度標記與回覆，側邊 Drawer；見 §6.4）
+- [x] `AdminDashboardComponent` 外殼改為兩個平行頂層 Tab（學校統整 / 案件處理；見 §6.2.0）
+  - [x] `CaseManagementComponent`（案件處理 Tab：全縣市案件清單 + 篩選；見 §6.2.2）
+  - [x] `ReportCaseDrawerComponent`（單筆案件處理進度標記與回覆，側邊 Drawer；見 §6.4）
