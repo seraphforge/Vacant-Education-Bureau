@@ -211,11 +211,11 @@ export class ReportService {
     const steps: TrackingResponse['steps'] =
       status === 'rejected'
         ? [
-            { key: 'submitted', label: '已報報', state: 'done' },
+            { key: 'submitted', label: '已通報', state: 'done' },
             { key: 'rejected', label: '不受理', state: 'current' },
           ]
         : [
-            { key: 'submitted', label: '已報報', state: status === 'submitted' ? 'current' : 'done' },
+            { key: 'submitted', label: '已通報', state: status === 'submitted' ? 'current' : 'done' },
             {
               key: 'investigating',
               label: '調查中',
@@ -235,7 +235,7 @@ export class ReportService {
       status,
       statusLabel:
         status === 'submitted'
-          ? '已報報'
+          ? '已通報'
           : status === 'investigating'
             ? '調查中'
             : status === 'closed'

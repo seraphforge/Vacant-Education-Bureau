@@ -190,7 +190,7 @@ def main():
         print("\n=== 4. 追蹤頁 ===")
         code, body = call("GET", f"/api/reports/{token}")
         check("追蹤頁回 200", code == 200, str(body)[:120])
-        check("狀態為 已報報", body.get("statusLabel") == "已報報")
+        check("狀態為 已通報", body.get("statusLabel") == "已通報")
         steps = body.get("steps") or []
         check("三個階段節點", len(steps) == 3, str([s["label"] for s in steps]))
         check("第一節點 current",

@@ -1,10 +1,11 @@
 import { Component, inject, signal } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
+import { TabViewModule } from 'primeng/tabview';
 import { TableLazyLoadEvent, TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
+import { CaseManagementComponent } from '../../components/case-management/case-management.component';
 import { HeaderComponent } from '../../components/header/header.component';
-import { ReportCaseDrawerComponent } from '../../components/report-case-drawer/report-case-drawer.component';
 import { SchoolDetailPanelComponent } from '../../components/school-detail-panel/school-detail-panel.component';
 import { Kindergarten } from '../../models/kindergarten.model';
 import { MeResponse, SecureApiService } from '../../services/secure-api.service';
@@ -12,11 +13,11 @@ import { MeResponse, SecureApiService } from '../../services/secure-api.service'
 /**
  * 政府機關資料整合主頁 /admin/dashboard（UI_SPEC §6.2）。
  *
- * - 進頁先打 /api/secure/me 取得登入人員縣市（顯示資料範圍）。
- * - PrimeNG Table 伺服器端分頁載入該範圍的幼兒園（含 risk_score/risk_level）。
- * - 整列文字顏色依 risk_level（UI_SPEC §6.2.1，顏色分級由後端決定，前端不自行比大小）：
- *     high  → 紫色、medium → 紅色、normal/null → 預設。
- * - 「詳細資料」按鈕開啟 Tabbed 浮動面板（Phase 7 的 SchoolDetailPanelComponent）。
+ * 外殼：Header（登入版）+ PrimeNG TabView 兩個平行 Tab：
+ *   Tab 1「學校統整」— 學校資料表格（§6.2.1）+ 詳細資料浮動面板（§6.3）
+ *   Tab 2「案件處理」— 全縣市家長回報案件總覽（CaseManagementComponent，§6.2.2 / §6.4）
+ *
+ * 進頁先打 /api/secure/me 取得縣市範圍顯示。資料範圍由後端依 token 鎖定。
  */
 @Component({
   selector: 'app-admin-dashboard',
@@ -24,7 +25,8 @@ import { MeResponse, SecureApiService } from '../../services/secure-api.service'
   imports: [
     HeaderComponent,
     SchoolDetailPanelComponent,
-    ReportCaseDrawerComponent,
+    CaseManagementComponent,
+    TabViewModule,
     TableModule,
     ButtonModule,
     TagModule,
@@ -36,6 +38,8 @@ export class AdminDashboardComponent {
   private secure = inject(SecureApiService);
 
   readonly me = signal<MeResponse | null>(null);
+
+  // ---- Tab 1：學校統整表格 ----
   readonly rows = signal<Kindergarten[]>([]);
   readonly total = signal(0);
   readonly loading = signal(false);
@@ -43,8 +47,6 @@ export class AdminDashboardComponent {
 
   /** 被選來看詳情的幼兒園；非 null 時開啟風險面板（§6.3） */
   readonly selected = signal<Kindergarten | null>(null);
-  /** 被選來處理家長回報案件的幼兒園；非 null 時開啟 Drawer（§6.4） */
-  readonly caseTarget = signal<Kindergarten | null>(null);
 
   constructor() {
     this.secure.me().subscribe({
@@ -102,17 +104,7 @@ export class AdminDashboardComponent {
     this.selected.set(null);
   }
 
-  openCases(kg: Kindergarten): void {
-    this.caseTarget.set(kg);
-  }
-
-  closeCases(): void {
-    this.caseTarget.set(null);
-  }
-
   displayScore(kg: Kindergarten): string {
-    return kg.risk_score === null || kg.risk_score === undefined
-      ? '—'
-      : String(kg.risk_score);
+    return kg.risk_score === null || kg.risk_score === undefined ? '—' : String(kg.risk_score);
   }
 }

@@ -10,25 +10,15 @@
   <ng-template pTemplate="header">
     <div class="drawer-head">
       <i class="pi pi-inbox"></i>
-      <span>家長回報案件</span>
-      @if (kindergarten(); as kg) {
-        <small class="drawer-head__kg">{{ kg.school_name }}</small>
+      <span>案件處理</span>
+      @if (detail(); as d) {
+        <small class="drawer-head__kg">{{ d.kindergarten.schoolName }}</small>
       }
     </div>
   </ng-template>
 
-  <!-- ============ 詳情檢視 ============ -->
   @if (detail(); as d) {
     <div class="case">
-      <button
-        type="button"
-        pButton
-        class="p-button-text p-button-sm case__back"
-        icon="pi pi-arrow-left"
-        label="返回清單"
-        (click)="backToList()"
-      ></button>
-
       <div class="case__head">
         <div>
           <span class="case__caseno">案號 {{ d.caseNo }}</span>
@@ -216,35 +206,5 @@
     <div class="drawer-center">
       <p-progressSpinner strokeWidth="4" [style]="{ width: '40px', height: '40px' }"></p-progressSpinner>
     </div>
-  } @else {
-    <!-- ============ 清單檢視 ============ -->
-    @if (listLoading()) {
-      <div class="drawer-center">
-        <p-progressSpinner strokeWidth="4" [style]="{ width: '40px', height: '40px' }"></p-progressSpinner>
-      </div>
-    } @else if (reports().length === 0) {
-      <div class="drawer-center drawer-empty">
-        <i class="pi pi-inbox"></i>
-        <p>這間幼兒園目前沒有家長回報案件。</p>
-      </div>
-    } @else {
-      <ul class="report-list">
-        @for (r of reports(); track r.id) {
-          <li class="report-list__item" (click)="openCase(r)" tabindex="0" (keydown.enter)="openCase(r)">
-            <div class="report-list__top">
-              <span class="report-list__caseno">{{ r.caseNo }}</span>
-              <p-tag [value]="r.statusLabel" [severity]="statusSeverity(r.status)"></p-tag>
-            </div>
-            <p class="report-list__excerpt">{{ r.contentExcerpt }}</p>
-            <div class="report-list__meta">
-              <span>{{ formatTaipei(r.createdAt) }}</span>
-              @if (r.attachmentCount > 0) {
-                <span><i class="pi pi-paperclip"></i> {{ r.attachmentCount }}</span>
-              }
-            </div>
-          </li>
-        }
-      </ul>
-    }
   }
 </p-sidebar>

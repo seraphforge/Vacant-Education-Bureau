@@ -3,7 +3,7 @@
 
   <main class="dash__main">
     <div class="dash__bar">
-      <h2 class="dash__title">教保機構風險總覽</h2>
+      <h2 class="dash__title">教保機構風險評估整合平臺</h2>
       @if (me(); as m) {
         <span class="dash__scope">
           <i class="pi pi-map-marker"></i>
@@ -15,81 +15,75 @@
       }
     </div>
 
-    <p-table
-      [value]="rows()"
-      [lazy]="true"
-      (onLazyLoad)="loadRows($event)"
-      [paginator]="true"
-      [rows]="pageSize"
-      [totalRecords]="total()"
-      [loading]="loading()"
-      [rowsPerPageOptions]="[20, 50, 100]"
-      dataKey="id"
-      styleClass="p-datatable-sm"
-      [tableStyle]="{ 'min-width': '60rem' }"
-    >
-      <ng-template pTemplate="header">
-        <tr>
-          <th pSortableColumn="school_name">學校名稱 <p-sortIcon field="school_name"></p-sortIcon></th>
-          <th pSortableColumn="risk_score" style="width: 9rem">
-            風險指數 <p-sortIcon field="risk_score"></p-sortIcon>
-          </th>
-          <th>縣市</th>
-          <th>鄉鎮市區</th>
-          <th>地址</th>
-          <th style="width: 10rem">電話</th>
-          <th style="width: 15rem">操作</th>
-        </tr>
-      </ng-template>
+    <p-tabView>
+      <!-- ===== Tab 1：學校統整 ===== -->
+      <p-tabPanel header="學校統整" leftIcon="pi pi-building">
+        <p-table
+          [value]="rows()"
+          [lazy]="true"
+          (onLazyLoad)="loadRows($event)"
+          [paginator]="true"
+          [rows]="pageSize"
+          [totalRecords]="total()"
+          [loading]="loading()"
+          [rowsPerPageOptions]="[20, 50, 100]"
+          dataKey="id"
+          styleClass="p-datatable-sm"
+          [tableStyle]="{ 'min-width': '60rem' }"
+        >
+          <ng-template pTemplate="header">
+            <tr>
+              <th pSortableColumn="school_name">學校名稱 <p-sortIcon field="school_name"></p-sortIcon></th>
+              <th pSortableColumn="risk_score" style="width: 9rem">
+                風險指數 <p-sortIcon field="risk_score"></p-sortIcon>
+              </th>
+              <th>縣市</th>
+              <th>鄉鎮市區</th>
+              <th>地址</th>
+              <th style="width: 10rem">電話</th>
+              <th style="width: 9rem">詳細資料</th>
+            </tr>
+          </ng-template>
 
-      <ng-template pTemplate="body" let-kg>
-        <tr [class]="rowClass(kg)">
-          <td>{{ kg.school_name }}</td>
-          <td>{{ displayScore(kg) }}</td>
-          <td>{{ kg.county }}</td>
-          <td>{{ kg.district }}</td>
-          <td>{{ kg.address }}</td>
-          <td>{{ kg.phone }}</td>
-          <td>
-            <div class="dash__actions">
-              <button
-                type="button"
-                pButton
-                class="p-button-sm p-button-outlined"
-                icon="pi pi-search"
-                label="詳細資料"
-                (click)="openDetail(kg)"
-              ></button>
-              <button
-                type="button"
-                pButton
-                class="p-button-sm p-button-outlined p-button-secondary"
-                icon="pi pi-inbox"
-                label="回報案件"
-                (click)="openCases(kg)"
-              ></button>
-            </div>
-          </td>
-        </tr>
-      </ng-template>
+          <ng-template pTemplate="body" let-kg>
+            <tr [class]="rowClass(kg)">
+              <td>{{ kg.school_name }}</td>
+              <td>{{ displayScore(kg) }}</td>
+              <td>{{ kg.county }}</td>
+              <td>{{ kg.district }}</td>
+              <td>{{ kg.address }}</td>
+              <td>{{ kg.phone }}</td>
+              <td>
+                <button
+                  type="button"
+                  pButton
+                  class="p-button-sm p-button-outlined"
+                  icon="pi pi-search"
+                  label="查看"
+                  (click)="openDetail(kg)"
+                ></button>
+              </td>
+            </tr>
+          </ng-template>
 
-      <ng-template pTemplate="emptymessage">
-        <tr>
-          <td colspan="7" class="dash__empty">目前沒有資料。</td>
-        </tr>
-      </ng-template>
-    </p-table>
+          <ng-template pTemplate="emptymessage">
+            <tr>
+              <td colspan="7" class="dash__empty">目前沒有資料。</td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </p-tabPanel>
+
+      <!-- ===== Tab 2：案件處理 ===== -->
+      <p-tabPanel header="案件處理" leftIcon="pi pi-inbox">
+        <app-case-management></app-case-management>
+      </p-tabPanel>
+    </p-tabView>
   </main>
 </div>
 
-<!-- 詳細資料 Tabbed 浮動面板（風險/財報/輿情，selected() 非 null 時開啟） -->
+<!-- 詳細資料 Tabbed 浮動面板（風險/財報/輿情，selected() 非 null 時開啟；屬於學校統整 Tab） -->
 <app-school-detail-panel
   [kindergarten]="selected()"
   (closed)="closeDetail()"
 ></app-school-detail-panel>
-
-<!-- 行政人員處理進度標記與回覆側邊 Drawer（caseTarget() 非 null 時開啟，§6.4） -->
-<app-report-case-drawer
-  [kindergarten]="caseTarget()"
-  (closed)="closeCases()"
-></app-report-case-drawer>

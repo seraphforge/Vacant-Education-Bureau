@@ -12,32 +12,30 @@ import { SidebarModule } from 'primeng/sidebar';
 import { TagModule } from 'primeng/tag';
 import { ToastModule } from 'primeng/toast';
 
-import { Kindergarten } from '../../models/kindergarten.model';
-import {
-  ReportDetail,
-  ReportListItem,
-  ReportStatus,
-} from '../../models/report.model';
+import { ReportDetail, ReportStatus } from '../../models/report.model';
 import { SecureReportService } from '../../services/secure-report.service';
 
 type MessageKind = 'reply' | 'internal_note';
 
 /** 狀態下拉選項（送出 enum，顯示中文）— 對應 API_SPEC §5.1 */
 const STATUS_OPTIONS: { label: string; value: ReportStatus }[] = [
-  { label: '已報報', value: 'submitted' },
+  { label: '已通報', value: 'submitted' },
   { label: '調查中', value: 'investigating' },
   { label: '調查完畢', value: 'closed' },
   { label: '不受理', value: 'rejected' },
 ];
 
 /**
- * 行政人員處理進度標記與回覆（UI_SPEC §6.4）。
+ * 單筆案件處理 Drawer（UI_SPEC §6.4）。
  *
- * 側邊 Drawer（p-sidebar，右側滑出）：
- *  1. 依 kindergartenId 列出該園家長回報案件（GET /api/secure/reports）
- *  2. 選一筆看詳情（GET /api/secure/reports/{id}）
- *  3. 標記狀態（PATCH，不受理需填理由）、回覆家長 / 內部備註（POST messages）
- *  4. 明確區分「尚未儲存 / 已儲存」，避免誤以為已送出
+ * 由案件處理 Tab（CaseManagementComponent）在點選某筆案件時開啟，傳入 reportId。
+ * 側邊 Drawer（p-sidebar，右側滑出）內：
+ *  - 案件詳情（GET /api/secure/reports/{id}）
+ *  - 標記狀態（PATCH，不受理需填理由）
+ *  - 回覆家長 / 內部備註（POST messages）
+ *  - 明確區分「尚未儲存 / 已儲存」，避免誤以為已送出
+ *
+ * 狀態或訊息變更成功後，透過 updated 事件通知父層更新清單那一列。
  */
 @Component({
   selector: 'app-report-case-drawer',
@@ -60,10 +58,12 @@ const STATUS_OPTIONS: { label: string; value: ReportStatus }[] = [
   styleUrl: './report-case-drawer.component.scss',
 })
 export class ReportCaseDrawerComponent {
-  /** 要處理的幼兒園；null 表示關閉 Drawer */
-  readonly kindergarten = input.required<Kindergarten | null>();
+  /** 要處理的案件 id；null 表示關閉 Drawer */
+  readonly reportId = input.required<number | null>();
   /** 關閉通知父層 */
   readonly closed = output<void>();
+  /** 案件狀態被更新時，帶出最新詳情供父層同步清單 */
+  readonly updated = output<ReportDetail>();
 
   private secure = inject(SecureReportService);
   private toast = inject(MessageService);
@@ -75,10 +75,6 @@ export class ReportCaseDrawerComponent {
   ];
 
   readonly visible = signal(false);
-
-  // ---- 清單 ----
-  readonly listLoading = signal(false);
-  readonly reports = signal<ReportListItem[]>([]);
 
   // ---- 詳情 ----
   readonly detailLoading = signal(false);
@@ -125,42 +121,19 @@ export class ReportCaseDrawerComponent {
   constructor() {
     effect(
       () => {
-        const kg = this.kindergarten();
-        this.visible.set(kg !== null);
-        if (kg) {
-          this.resetAll();
-          this.loadList(kg.id);
+        const id = this.reportId();
+        this.visible.set(id !== null);
+        if (id !== null) {
+          this.resetForms();
+          this.loadDetail(id);
         }
       },
       { allowSignalWrites: true },
     );
   }
 
-  // ---------- 清單 ----------
-  private loadList(kindergartenId: number): void {
-    this.listLoading.set(true);
-    this.secure.listReports({ kindergartenId, pageSize: 100 }).subscribe({
-      next: (res) => {
-        this.reports.set(res.items);
-        this.listLoading.set(false);
-      },
-      error: () => {
-        this.reports.set([]);
-        this.listLoading.set(false);
-        this.toast.add({ severity: 'error', summary: '載入失敗', detail: '無法載入回報清單' });
-      },
-    });
-  }
-
-  openCase(item: ReportListItem): void {
-    this.loadDetail(item.id);
-  }
-
-  backToList(): void {
-    this.detail.set(null);
-  }
-
   private loadDetail(id: number): void {
+    this.detail.set(null);
     this.detailLoading.set(true);
     this.secure.getReport(id).subscribe({
       next: (d) => {
@@ -180,7 +153,6 @@ export class ReportCaseDrawerComponent {
     this.formStatus.set(d.status);
     this.formStatusReason.set(d.statusReason ?? '');
     this.notifyOnStatus.set(true);
-    // 重置訊息輸入
     this.messageKind.set('reply');
     this.messageBody.set('');
     this.notifyOnReply.set(true);
@@ -207,7 +179,7 @@ export class ReportCaseDrawerComponent {
       .subscribe({
         next: (updated) => {
           this.applyDetail(updated); // 覆蓋畫面、清 dirty
-          this.syncListItem(updated);
+          this.updated.emit(updated); // 通知父層同步清單
           this.savingStatus.set(false);
           this.toast.add({ severity: 'success', summary: '已儲存', detail: '處理進度已更新' });
         },
@@ -235,12 +207,10 @@ export class ReportCaseDrawerComponent {
       .addMessage(d.id, {
         kind,
         body,
-        // notifyParent 僅 reply 有效
         notifyParent: kind === 'reply' ? this.notifyOnReply() : undefined,
       })
       .subscribe({
         next: (res) => {
-          // 把新訊息加進詳情的訊息串
           const cur = this.detail();
           if (cur) {
             this.detail.set({ ...cur, messages: [...cur.messages, res.message] });
@@ -270,15 +240,6 @@ export class ReportCaseDrawerComponent {
       });
   }
 
-  /** 詳情狀態更新後，同步更新左側清單那一列 */
-  private syncListItem(d: ReportDetail): void {
-    this.reports.update((items) =>
-      items.map((it) =>
-        it.id === d.id ? { ...it, status: d.status, statusLabel: d.statusLabel } : it,
-      ),
-    );
-  }
-
   // ---------- 關閉 ----------
   onVisibleChange(v: boolean): void {
     this.visible.set(v);
@@ -287,9 +248,7 @@ export class ReportCaseDrawerComponent {
     }
   }
 
-  private resetAll(): void {
-    this.reports.set([]);
-    this.detail.set(null);
+  private resetForms(): void {
     this.formStatus.set(null);
     this.formStatusReason.set('');
     this.messageKind.set('reply');

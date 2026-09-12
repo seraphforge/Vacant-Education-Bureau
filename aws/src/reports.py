@@ -34,7 +34,7 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 STATUS_PENDING = "pending_verification"
 STATUS_LABELS = {
-    "submitted": "已報報",
+    "submitted": "已通報",
     "investigating": "調查中",
     "closed": "調查完畢",
     "rejected": "不受理",
@@ -56,8 +56,8 @@ def build_steps(status):
     """回傳追蹤頁要畫的節點集合。
 
     前端不做狀態機推導，一律照這裡給的畫（見 API_SPEC.md §3）：
-      * 一般案件三節點：已報報 -> 調查中 -> 調查完畢
-      * 不受理只有兩節點：已報報(done) -> 不受理(current)
+      * 一般案件三節點：已通報 -> 調查中 -> 調查完畢
+      * 不受理只有兩節點：已通報(done) -> 不受理(current)
     """
     if status == "rejected":
         return [
