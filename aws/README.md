@@ -45,15 +45,71 @@ RDS MySQL「my-mysql-db」     ← 資料庫，schema = moe，table = kindergart
 
 | 檔案 | 用途 |
 |---|---|
-| `template.yaml` | CloudFormation 模板，定義所有 AWS 資源 |
+| `template.yaml` | CloudFormation 模板，定義**後端 API** 資源 |
+| `web-template.yaml` | CloudFormation 模板，定義**前端網站託管**資源（S3 + CloudFront） |
 | `src/app.py` | Lambda 主程式（路由 + SQL 查詢） |
 | `src/requirements.txt` | Lambda 依賴（只有 PyMySQL，純 Python 不需編譯） |
 | `build_zip.py` | 把 `build/` 打包成 `lambda.zip` |
-| `deploy.ps1` | 一鍵部署腳本 |
+| `deploy.ps1` | 一鍵部署**後端** |
+| `deploy-web.ps1` | 一鍵部署**前端**（build + 上傳 + 清快取） |
 | `deploy.config.ps1` | 你的設定與**資料庫密碼**（已 gitignore，不會進版控） |
 | `deploy.config.example.ps1` | 給隊友抄的範本 |
 
-## 部署
+兩個 stack 是分開的，前端重新部署不會動到 API：
+
+| Stack | 內容 |
+|---|---|
+| `ntpc-kg-api` | Lambda、API Gateway、Security Group、IAM Role |
+| `ntpc-kg-api-web` | S3 網站 bucket、CloudFront distribution |
+
+## 前端託管（Live Demo）
+
+Live demo：**https://d17mx0mlb8rctm.cloudfront.net**
+
+```
+瀏覽器
+   │  HTTPS
+   ▼
+CloudFront (CDN)          ← 對外的 https 網址，自帶憑證
+   │  只有它能讀
+   ▼
+S3 bucket「ntpc-kg-web-<帳號ID>」  ← 放 ng build 產出的 index.html / js / css
+```
+
+部署：
+
+```powershell
+cd aws
+.\deploy-web.ps1
+```
+
+腳本會做：建 stack → `ng build --configuration production` →
+`aws s3 sync` 到 bucket → `create-invalidation` 清 CloudFront 快取 → 印出網址。
+之後改了前端程式，重跑同一行就更新。
+
+### 為什麼要 CloudFront，不能直接開 S3 靜態網站？
+
+S3 自己的靜態網站功能**只有 http、沒有 https**，而且要把 bucket 設成公開。
+加上 CloudFront 後：
+
+- 免費拿到 `https://xxx.cloudfront.net` 憑證（評審點連結不會出現安全警告）
+- S3 bucket 保持完全私有，只透過 **OAC（Origin Access Control）** 讓 CloudFront 讀
+- CDN 快取，從台灣連過來也不會慢（`PriceClass_200` 含亞洲節點）
+
+### SPA 路由的關鍵設定
+
+Angular 的 `/kindergartens` 這種路徑在 S3 上**不存在對應的檔案**，
+直接連會拿到 403/404。所以模板裡設了 `CustomErrorResponses`：
+把 403 和 404 都改成回傳 `200` + `/index.html`，讓 Angular 自己接手路由。
+
+### 快取策略
+
+| 檔案 | Cache-Control | 原因 |
+|---|---|---|
+| `main-XXXX.js`、`styles-XXXX.css` | `max-age=31536000, immutable` | 檔名帶 hash，內容變檔名就變，可以永久快取 |
+| `index.html` | `no-cache` | 一定要每次重新抓，否則使用者會拿到舊 HTML 指向已刪掉的舊 js |
+
+## 部署（後端）
 
 第一次：
 
@@ -151,10 +207,16 @@ aws logs tail /aws/lambda/ntpc-kg-api --region us-east-1 --follow
 ## 拆掉全部資源
 
 ```powershell
+# 前端（要先清空 bucket，否則 S3 bucket 刪不掉）
+aws s3 rm s3://ntpc-kg-web-135989901461 --recursive
+aws cloudformation delete-stack --stack-name ntpc-kg-api-web --region us-east-1
+
+# 後端
 aws cloudformation delete-stack --stack-name ntpc-kg-api --region us-east-1
 ```
 
-（S3 artifact bucket 要另外手動清空刪除。RDS 不在這個 stack 裡，不會被刪。）
+（RDS 不在這些 stack 裡，不會被刪。Lambda 程式碼的 artifact bucket
+`ntpc-kg-artifacts-<帳號ID>` 也要另外手動清。）
 
 ## 已知的簡化 / 待改進
 
@@ -166,6 +228,9 @@ aws cloudformation delete-stack --stack-name ntpc-kg-api --region us-east-1
    Interface VPC Endpoint（要收費）。
 2. **API 沒有任何身分驗證，任何人拿到網址都能查。** 目前資料是公開資料所以可接受；
    之後若加入財報、家長回報等非公開資料，必須加上 Cognito 或 Lambda Authorizer。
-3. **CORS 開放 `*`。** 上線前應改成前端實際網域。
+3. **CORS 開放 `*`。** 現在同時要讓 CloudFront 網址和本機 `localhost:4200` 都能呼叫，
+   所以先開放。正式上線應改成只允許 CloudFront 網域。
 4. **每個 Lambda 冷啟動都要重連 MySQL。** 流量大時可考慮 RDS Proxy 管理連線池。
-5. **前端目前只在本機跑。** 之後可放 S3 + CloudFront 做靜態網站。
+5. **沒有自訂網域。** 目前用 `*.cloudfront.net`。若要 `xxx.example.com`，
+   需要 Route 53 + ACM 憑證（憑證必須簽在 us-east-1，剛好我們就在這個 region）。
+

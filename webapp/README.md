@@ -19,8 +19,21 @@ npm start          # = ng serve，開 http://localhost:4200
 打包正式版：
 
 ```powershell
-npm run build      # 產出到 dist/webapp
+npm run build      # 產出到 dist/webapp/browser
 ```
+
+## 部署到 AWS
+
+Live demo：**https://d17mx0mlb8rctm.cloudfront.net**（S3 + CloudFront）
+
+```powershell
+cd ..\aws
+.\deploy-web.ps1
+```
+
+這個腳本會自動 `ng build --configuration production`、上傳到 S3、清 CloudFront
+快取，所以**不需要**自己先 build。設定細節見 [`aws/README.md`](../aws/README.md)
+的「前端託管」章節。
 
 ## 設定後端網址
 
