@@ -1,0 +1,315 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Kindergarten query API (serverless).
+  API Gateway HTTP API -> Lambda (Python, inside the RDS VPC) -> RDS MySQL.
+  NOTE: comments in this file are kept ASCII-only because the AWS CLI on
+  Windows decodes template files with the system ANSI code page.
+  See aws/README.md for the Chinese explanation.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: ntpc-kg
+    Description: Prefix used when naming resources.
+
+  CodeS3Bucket:
+    Type: String
+    Description: S3 bucket that holds the Lambda deployment zip.
+
+  CodeS3Key:
+    Type: String
+    Description: S3 key of the Lambda zip. Changes on every deploy so the function updates.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the RDS instance lives.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets to attach the Lambda to (same VPC as RDS).
+
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the RDS instance. An inbound rule for the Lambda is added to it.
+
+  DbHost:
+    Type: String
+  DbPort:
+    Type: String
+    Default: "3306"
+  DbName:
+    Type: String
+    Default: readme
+  DbUser:
+    Type: String
+  DbPassword:
+    Type: String
+    NoEcho: true
+
+  # Cognito settings. Both default to "" so this stack can be deployed before
+  # the auth stack exists; the JWT authorizer and the protected routes are then
+  # simply skipped. deploy.ps1 fills these in automatically once the auth
+  # stack is there.
+  UserPoolClientId:
+    Type: String
+    Default: ""
+    Description: Cognito app client id (JWT audience). Empty disables auth.
+  UserPoolIssuer:
+    Type: String
+    Default: ""
+    Description: Cognito issuer URL. Empty disables auth.
+
+Conditions:
+  HasAuth: !Not [!Equals [!Ref UserPoolIssuer, ""]]
+
+Resources:
+  # --------------------------------------------------------------------------
+  # Networking: a dedicated SG for the Lambda, plus an inbound rule on the
+  # existing RDS SG so the Lambda is allowed to reach MySQL.
+  # --------------------------------------------------------------------------
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${ProjectName} lambda outbound"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+          Description: MySQL only
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-lambda-sg"
+
+  RdsIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref DbPort
+      ToPort: !Ref DbPort
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Description: !Sub "${ProjectName} lambda to RDS MySQL"
+
+  # --------------------------------------------------------------------------
+  # Lambda
+  # --------------------------------------------------------------------------
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # CloudWatch Logs + permission to create ENIs inside the VPC
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-api"
+      RetentionInDays: 7
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-api"
+      Runtime: python3.12
+      Handler: app.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 20
+      MemorySize: 512
+      Architectures:
+        - x86_64
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Environment:
+        Variables:
+          DB_HOST: !Ref DbHost
+          DB_PORT: !Ref DbPort
+          DB_NAME: !Ref DbName
+          DB_USER: !Ref DbUser
+          DB_PASSWORD: !Ref DbPassword
+
+  # --------------------------------------------------------------------------
+  # API Gateway HTTP API (cheaper and simpler than REST API)
+  # --------------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-http-api"
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - "*"
+        MaxAge: 300
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  # --------------------------------------------------------------------------
+  # Routes.
+  #
+  # Public routes are listed explicitly instead of using a catch-all
+  # "ANY /{proxy+}". That way a newly added endpoint is never public by
+  # accident: it has to be added here on purpose, or live under /api/secure.
+  # --------------------------------------------------------------------------
+  RouteHealth:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/health"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteCounties:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/counties"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteAcademicYears:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/academic-years"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteKindergartens:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/kindergartens"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  ApiRootRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "ANY /"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  # --------------------------------------------------------------------------
+  # Authentication (only created when the auth stack has been deployed).
+  #
+  # A JWT authorizer makes API Gateway verify the Cognito token signature and
+  # expiry before the Lambda ever runs. This matters here because the Lambda
+  # sits in a VPC with no internet access, so it could not download Cognito's
+  # public keys to verify a token itself.
+  #
+  # Audience is the app client id, which means only ID tokens are accepted.
+  # We need the ID token because custom:county only appears there, not in the
+  # access token.
+  # --------------------------------------------------------------------------
+  JwtAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Condition: HasAuth
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: cognito-jwt
+      AuthorizerType: JWT
+      IdentitySource:
+        - "$request.header.Authorization"
+      JwtConfiguration:
+        Audience:
+          - !Ref UserPoolClientId
+        Issuer: !Ref UserPoolIssuer
+
+  # Everything under /api/secure/ requires a valid token.
+  #
+  # Methods are listed one by one instead of using "ANY" on purpose.
+  # "ANY" would also match the browser's CORS preflight (OPTIONS), and a
+  # preflight carries no Authorization header, so the authorizer would reject
+  # it with 401 and every cross-origin call would fail. By not claiming
+  # OPTIONS here, API Gateway answers the preflight itself using
+  # CorsConfiguration above, without running the authorizer.
+  RouteSecureGet:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: HasAuth
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/secure/{proxy+}"
+      Target: !Sub "integrations/${ApiIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+
+  RouteSecurePost:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: HasAuth
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/secure/{proxy+}"
+      Target: !Sub "integrations/${ApiIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+
+  RouteSecurePut:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: HasAuth
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "PUT /api/secure/{proxy+}"
+      Target: !Sub "integrations/${ApiIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+
+  RouteSecureDelete:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: HasAuth
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "DELETE /api/secure/{proxy+}"
+      Target: !Sub "integrations/${ApiIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+Outputs:
+  ApiUrl:
+    Description: API base URL (put this in the frontend environment file)
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  HealthUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api/health"
+  FunctionName:
+    Value: !Ref ApiFunction
+  AuthEnabled:
+    Description: Whether the JWT authorizer is attached to /api/secure/*
+    Value: !If [HasAuth, "yes", "no"]

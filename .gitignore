@@ -290,6 +290,11 @@ $RECYCLE.BIN/
 
 bastion-key.pem
 bastion-key.ppk
+# AWS 後端部署產物 / 含密碼的設定檔
+aws/deploy.config.ps1
+aws/build/
+aws/lambda.zip
+_tmp_*
 
 # 財報原始 PDF（不納入版控，屬原始資料來源）
 data/finance_pdf_cleaning/raw/**/*.pdf
