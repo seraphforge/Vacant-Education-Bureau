@@ -139,6 +139,18 @@ if (Test-AwsSuccess @("cloudformation", "describe-stacks", "--stack-name", $Auth
 }
 
 Write-Host "==> 部署 CloudFormation stack: $StackName" -ForegroundColor Cyan
+
+# 家長回報的設定。舊的 deploy.config.ps1 沒有這些 key，就退回安全的預設值
+# （MailMode=dev 代表不真的寄信，驗證碼直接回在 API response）。
+$MailMode      = if ($Config.MailMode)      { $Config.MailMode }      else { "dev" }
+$MailFrom      = if ($Config.MailFrom)      { $Config.MailFrom }      else { "" }
+$PublicBaseUrl = if ($Config.PublicBaseUrl) { $Config.PublicBaseUrl } else { "" }
+$OtpPepper     = if ($Config.OtpPepper)     { $Config.OtpPepper }     else { "change-me-in-deploy-config" }
+if ($MailMode -eq "ses" -and -not $MailFrom) {
+    throw "MailMode = ses 但沒有設定 MailFrom（必須是已在 SES 驗證過的寄件地址）"
+}
+Write-Host "    MailMode = $MailMode$(if ($MailFrom) { " / from $MailFrom" })"
+
 $paramOverrides = @(
     "ProjectName=$ProjectName",
     "CodeS3Bucket=$Bucket",
@@ -152,7 +164,11 @@ $paramOverrides = @(
     "DbUser=$($Config.DbUser)",
     "DbPassword=$($Config.DbPassword)",
     "UserPoolClientId=$UserPoolClientId",
-    "UserPoolIssuer=$UserPoolIssuer"
+    "UserPoolIssuer=$UserPoolIssuer",
+    "MailMode=$MailMode",
+    "MailFrom=$MailFrom",
+    "PublicBaseUrl=$PublicBaseUrl",
+    "OtpPepper=$OtpPepper"
 )
 
 Use-NativeErrorMode

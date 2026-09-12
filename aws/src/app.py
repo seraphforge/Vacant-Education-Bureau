@@ -1,23 +1,47 @@
 """
-幼兒園查詢 API — 單一 Lambda 處理所有路由（HTTP API payload v2.0）。
+幼兒園查詢 + 家長回報 API — 單一 Lambda 處理所有路由（HTTP API payload v2.0）。
 
 資料現況：kindergarten 表只保留最新學年度（114）一份，等同「一校一列」，
 id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指回 kindergarten(id)。
 
+模組分工（deploy.ps1 是平鋪複製 src/*.py，所以所有檔案都放在 src/ 根層）：
+  app.py           路由分派 + 幼兒園/裁罰查詢
+  common.py        DB 連線、HTTP 回應、body 解析、時間格式
+  auth.py          JWT claims、縣市範圍控管、staff_profile
+  reports.py       家長回報（公開端點）
+  reports_admin.py 家長回報（政府端）
+  mailer.py        SESv2 寄信（含 dev mode）
+  storage.py       S3 presigned URL（附件）
+  risk.py          風險指數（目前是 placeholder）
+
+完整的請求／回應格式定義在專案根目錄的 API_SPEC.md。
+
 路由：
 
 公開（不需登入）：
-  GET /api/health                          健康檢查（會實際 ping DB）
-  GET /api/counties                        縣市清單
-  GET /api/academic-years                  學年度清單（目前只有 114）
-  GET /api/kindergartens                   查詢清單（縣市 + 名稱 LIKE + 分頁）
-  GET /api/punishments                     裁罰紀錄查詢（縣市/鄉鎮/名稱/日期/罰鍰 + 分頁）
-  GET /api/kindergartens/{id}/punishments  單一幼兒園的裁罰紀錄
+  GET  /api/health                          健康檢查（會實際 ping DB）
+  GET  /api/counties                        縣市清單
+  GET  /api/academic-years                  學年度清單（目前只有 114）
+  GET  /api/kindergartens                   查詢清單（縣市 + 名稱 LIKE + 分頁）
+  GET  /api/punishments                     裁罰紀錄查詢（縣市/鄉鎮/名稱/日期/罰鍰 + 分頁）
+  GET  /api/kindergartens/{id}/punishments  單一幼兒園的裁罰紀錄
+  POST /api/reports/drafts                  建立回報草稿並寄出 Email 驗證碼
+  POST /api/reports/drafts/{id}/attachments/presign  取得 S3 直傳網址
+  POST /api/reports/drafts/{id}/attachments          登錄已上傳的附件
+  POST /api/reports/drafts/{id}/otp/verify           驗證碼正確才正式成案
+  POST /api/reports/drafts/{id}/otp/resend           重寄驗證碼
+  GET  /api/reports/{token}                 回報進度追蹤（憑 token）
 
 需登入（Cognito ID token，API Gateway 已先驗過簽章與過期）：
-  GET /api/secure/me                       我是誰 / 我能看哪個範圍
-  GET /api/secure/kindergartens            同上查詢，但縣市鎖在使用者權限內
-  GET /api/secure/punishments              同裁罰查詢，但縣市鎖在使用者權限內
+  GET   /api/secure/me                      我是誰 / 我能看哪個範圍
+  GET   /api/secure/kindergartens           同上查詢，但縣市鎖在權限內，並帶出風險指數
+  GET   /api/secure/punishments             同裁罰查詢，但縣市鎖在使用者權限內
+  GET   /api/secure/reports                 家長回報清單（依縣市過濾）
+  GET   /api/secure/reports/summary         各狀態件數
+  GET   /api/secure/reports/{id}            案件詳情（含附件與訊息串）
+  POST  /api/secure/reports/{id}/messages   回覆家長 / 內部備註
+  PATCH /api/secure/reports/{id}            變更狀態 / 指派承辦
+  GET   /api/secure/kindergartens/{id}/risk 風險評估（placeholder）
 
 /api/kindergartens 支援的 query string：
   county        縣市名稱，例如 新北市（可省略 = 全部）
@@ -39,17 +63,13 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
   sortBy/sortDir 排序（白名單欄位：punish_date/fine_amount/school_name/district/id）
 """
 
-import json
-import os
 import re
 
-import pymysql
-
-DB_HOST = os.environ["DB_HOST"]
-DB_PORT = int(os.environ.get("DB_PORT", "3306"))
-DB_USER = os.environ["DB_USER"]
-DB_PASSWORD = os.environ["DB_PASSWORD"]
-DB_NAME = os.environ.get("DB_NAME", "readme")
+import auth
+import reports
+import reports_admin
+import risk
+from common import error, get_conn, parse_body, respond, to_int
 
 # 只允許排序這些欄位，避免 SQL injection
 SORTABLE = {
@@ -59,6 +79,8 @@ SORTABLE = {
     "district": "district",
     "academic_year": "academic_year",
     "ownership": "ownership",
+    # 受保護端點才有意義（公開版沒有 JOIN risk_score_current，會被忽略）
+    "risk_score": "risk_score",
 }
 
 # 裁罰查詢可排序的欄位白名單
@@ -71,102 +93,14 @@ PUNISH_SORTABLE = {
 }
 
 # Lambda 容器重用時共用連線，省下每次重新握手的時間
-_conn = None
-
-
-def get_conn():
-    global _conn
-    if _conn is not None:
-        try:
-            _conn.ping(reconnect=True)
-            return _conn
-        except Exception:
-            _conn = None
-    _conn = pymysql.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=5,
-        read_timeout=10,
-        write_timeout=10,
-        autocommit=True,
-    )
-    return _conn
-
-
-def respond(status, body):
-    return {
-        "statusCode": status,
-        "headers": {
-            "Content-Type": "application/json; charset=utf-8",
-            "Access-Control-Allow-Origin": "*",
-        },
-        "body": json.dumps(body, ensure_ascii=False, default=str),
-    }
-
-
-def to_int(value, default, lo, hi):
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, n))
+# （get_conn / respond / to_int 已移到 common.py，本檔只 import 使用）
 
 
 # ---------------------------------------------------------------------------
 # 認證
 #
-# /api/secure/* 這些路由在 API Gateway 就掛了 JWT authorizer，
-# 所以進到這裡的 event 一定已經通過簽章與過期驗證，claims 可以直接信任。
-# 公開路由（/api/kindergartens 等）不會有 claims。
+# 實作在 auth.py（get_identity / scoped_county / upsert_staff_profile）。
 # ---------------------------------------------------------------------------
-def get_claims(event):
-    """取出已驗證的 JWT claims；公開路由回 {}。"""
-    return (
-        event.get("requestContext", {})
-        .get("authorizer", {})
-        .get("jwt", {})
-        .get("claims", {})
-    )
-
-
-def get_identity(event):
-    """把 claims 整理成好用的形式。"""
-    claims = get_claims(event)
-    if not claims:
-        return None
-
-    # cognito:groups 在 claims 裡可能是 list，也可能是 "[admin]" 這種字串
-    raw_groups = claims.get("cognito:groups") or []
-    if isinstance(raw_groups, str):
-        raw_groups = [g for g in re.split(r"[\[\]\s,]+", raw_groups) if g]
-
-    return {
-        "username": claims.get("cognito:username") or claims.get("sub"),
-        "county": (claims.get("custom:county") or "").strip(),
-        "agency": (claims.get("custom:agency") or "").strip(),
-        "groups": raw_groups,
-        "isAdmin": "admin" in raw_groups,
-    }
-
-
-def scoped_county(identity, requested=""):
-    """回傳這個使用者實際可以查的縣市。
-
-    - admin 群組：可查全國（回 None 代表不加縣市條件），
-      也可以指定某個縣市來檢視。
-    - 一般人員：一律鎖回自己的 custom:county，
-      **完全忽略前端送來的值**，否則改個網址就能看別的縣市。
-    """
-    if identity["isAdmin"]:
-        return (requested or "").strip() or None
-    return identity["county"] or None
-
-
 def handle_health(cur):
     cur.execute("SELECT COUNT(*) AS total FROM kindergarten")
     return respond(200, {"ok": True, "total": cur.fetchone()["total"]})
@@ -191,11 +125,14 @@ def handle_academic_years(cur):
     return respond(200, {"items": cur.fetchall()})
 
 
-def handle_kindergartens(cur, qs, force_county=None):
+def handle_kindergartens(cur, qs, force_county=None, with_risk=False):
     """查詢幼兒園清單。
 
     force_county 不是 None 時，縣市條件一律用它，忽略 query string，
     這是給 /api/secure/* 做資料範圍控管用的。
+
+    with_risk=True 時 LEFT JOIN risk_score_current，每列多帶
+    risk_score / risk_level（給 /admin/dashboard 的風險指數欄與整列上色用）。
     """
     county = (qs.get("county") or "").strip() if force_county is None else force_county
     name = (qs.get("name") or "").strip()
@@ -206,6 +143,9 @@ def handle_kindergartens(cur, qs, force_county=None):
 
     sort_by = SORTABLE.get((qs.get("sortBy") or "").strip(), "id")
     sort_dir = "DESC" if (qs.get("sortDir") or "").lower() == "desc" else "ASC"
+    if sort_by == "risk_score":
+        # 沒 JOIN 風險表時這個欄位不存在，退回預設排序
+        sort_by = "r.total_score" if with_risk else "id"
 
     # 資料只保留最新學年度（114）一份，一校一列，所以不再強制帶學年度。
     # academicYear 仍可當選填過濾條件（相容舊呼叫）。
@@ -232,17 +172,35 @@ def handle_kindergartens(cur, qs, force_county=None):
     cur.execute(f"SELECT COUNT(*) AS total FROM kindergarten {where_sql}", params)
     total = cur.fetchone()["total"]
 
+    # risk_score_current 沒有與 kindergarten 同名的欄位，所以 WHERE 裡的
+    # 不加前綴寫法（county = %s）在 JOIN 之後仍然不會有歧義。
+    risk_cols = (
+        ", r.total_score AS risk_score, r.risk_level, r.is_placeholder AS risk_is_placeholder"
+        if with_risk
+        else ""
+    )
+    risk_join = (
+        "LEFT JOIN risk_score_current r ON r.kindergarten_id = kindergarten.id"
+        if with_risk
+        else ""
+    )
+
     offset = (page - 1) * page_size
     cur.execute(
-        f"""SELECT id, academic_year, code, school_name, ownership,
-                   county, district, address, phone
+        f"""SELECT kindergarten.id, academic_year, code, school_name, ownership,
+                   county, district, address, phone{risk_cols}
             FROM kindergarten
+            {risk_join}
             {where_sql}
-            ORDER BY {sort_by} {sort_dir}, id ASC
+            ORDER BY {sort_by} {sort_dir}, kindergarten.id ASC
             LIMIT %s OFFSET %s""",
         params + [page_size, offset],
     )
     items = cur.fetchall()
+    if with_risk:
+        for item in items:
+            if item.get("risk_score") is not None:
+                item["risk_score"] = float(item["risk_score"])
 
     return respond(
         200,
@@ -386,16 +344,22 @@ def handle_kindergarten_punishments(cur, kg_id):
 # ---------------------------------------------------------------------------
 # 受保護端點（/api/secure/*）
 #
-# 目前只放「確認登入與權限範圍」用的兩支，
-# 家長回報 / 財報 / 風險分析的實作照 handle_secure_kindergartens 的樣子加即可：
-# 從 identity 拿到 county，用 scoped_county() 決定範圍，再進 SQL。
+# 範圍控管的模式：從 identity 拿 county，用 auth.scoped_county() 決定範圍，
+# 再把它當成 SQL 的強制條件。家長回報清單（reports_admin.py）也照這個模式。
 # ---------------------------------------------------------------------------
-def handle_secure_me(identity):
-    """回傳「我是誰、我能看哪個範圍」，前端登入後用來顯示身分。"""
+def handle_secure_me(cur, identity):
+    """回傳「我是誰、我能看哪個範圍」，前端登入後用來顯示身分。
+
+    順手把身分寫進 staff_profile（JIT provisioning），
+    這樣 UI_SPEC 6.2「從資料庫讀取所屬縣市」有東西可讀，
+    回覆家長時也才有 display_name 可以署名。
+    """
+    profile = auth.upsert_staff_profile(cur, identity)
     return respond(
         200,
         {
             "username": identity["username"],
+            "displayName": (profile or {}).get("display_name"),
             "county": identity["county"] or None,
             "agency": identity["agency"] or None,
             "groups": identity["groups"],
@@ -405,24 +369,109 @@ def handle_secure_me(identity):
     )
 
 
-def handle_secure_kindergartens(cur, qs, identity):
-    """跟公開的查詢同一份資料，但縣市被鎖在使用者權限內。
-
-    這支的用途是示範 row-level 範圍控管怎麼做，
-    之後家長回報 / 財報 / 風險分析都照這個模式寫。
-    """
-    county = scoped_county(identity, qs.get("county", ""))
+def require_county(identity):
+    """非 admin 又沒設定縣市的帳號一律擋掉。回 (county, error_response)。"""
+    county = auth.scoped_county(identity)
     if county is None and not identity["isAdmin"]:
-        return respond(403, {"message": "這個帳號沒有設定縣市（custom:county），請聯絡管理者"})
-    return handle_kindergartens(cur, qs, force_county=county or "")
+        return None, error(
+            403, "FORBIDDEN", "這個帳號沒有設定縣市（custom:county），請聯絡管理者"
+        )
+    return county, None
+
+
+def handle_secure_kindergartens(cur, qs, identity):
+    """跟公開的查詢同一份資料，但縣市被鎖在使用者權限內，並帶出風險指數。"""
+    county, err = require_county(identity)
+    if err:
+        return err
+    return handle_kindergartens(cur, qs, force_county=county or "", with_risk=True)
 
 
 def handle_secure_punishments(cur, qs, identity):
     """裁罰查詢，但縣市鎖在使用者權限範圍內（同 handle_secure_kindergartens 模式）。"""
-    county = scoped_county(identity, qs.get("county", ""))
-    if county is None and not identity["isAdmin"]:
-        return respond(403, {"message": "這個帳號沒有設定縣市（custom:county），請聯絡管理者"})
+    county, err = require_county(identity)
+    if err:
+        return err
     return handle_punishments(cur, qs, force_county=county or "")
+
+
+# ---------------------------------------------------------------------------
+# 路由
+# ---------------------------------------------------------------------------
+def route_public_reports(cur, method, path, event):
+    """家長回報（公開端點）。回 None 表示這條路徑不屬於這一區。"""
+    # /api/reports/drafts
+    if path == "/api/reports/drafts" and method == "POST":
+        body, err = parse_body(event)
+        return err or reports.create_draft(cur, body)
+
+    m = re.fullmatch(r"/api/reports/drafts/(\d+)/otp/(verify|resend)", path)
+    if m and method == "POST":
+        draft_id, action = int(m.group(1)), m.group(2)
+        body, err = parse_body(event)
+        if err:
+            return err
+        if action == "verify":
+            return reports.verify_otp(cur, draft_id, body)
+        return reports.resend_otp(cur, draft_id)
+
+    m = re.fullmatch(r"/api/reports/drafts/(\d+)/attachments(/presign)?", path)
+    if m and method == "POST":
+        draft_id = int(m.group(1))
+        body, err = parse_body(event)
+        if err:
+            return err
+        if m.group(2):
+            return reports.presign_attachments(cur, draft_id, body)
+        return reports.register_attachments(cur, draft_id, body)
+
+    # /api/reports/{token}（放最後，避免吃掉上面的 /drafts 路徑）
+    m = re.fullmatch(r"/api/reports/([A-Za-z0-9_-]{20,64})", path)
+    if m and method == "GET":
+        return reports.get_tracking(cur, m.group(1))
+
+    return None
+
+
+def route_secure(cur, method, path, event, identity):
+    """需登入的端點。回 None 表示這條路徑不存在。"""
+    if path == "/api/secure/me":
+        return handle_secure_me(cur, identity)
+    if path == "/api/secure/kindergartens":
+        return handle_secure_kindergartens(cur, qs_of(event), identity)
+    if path == "/api/secure/punishments":
+        return handle_secure_punishments(cur, qs_of(event), identity)
+
+    # ---- 家長回報（政府端）----
+    if path == "/api/secure/reports" and method == "GET":
+        return reports_admin.list_reports(cur, qs_of(event), identity)
+    if path == "/api/secure/reports/summary" and method == "GET":
+        return reports_admin.summary(cur, identity)
+
+    m = re.fullmatch(r"/api/secure/reports/(\d+)", path)
+    if m:
+        report_id = int(m.group(1))
+        if method == "GET":
+            return reports_admin.get_detail(cur, report_id, identity)
+        if method == "PATCH":
+            body, err = parse_body(event)
+            return err or reports_admin.patch_report(cur, report_id, body, identity)
+
+    m = re.fullmatch(r"/api/secure/reports/(\d+)/messages", path)
+    if m and method == "POST":
+        body, err = parse_body(event)
+        return err or reports_admin.add_message(cur, int(m.group(1)), body, identity)
+
+    # ---- 風險評估（placeholder）----
+    m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/risk", path)
+    if m and method == "GET":
+        return risk.get_risk(cur, int(m.group(1)), identity)
+
+    return None
+
+
+def qs_of(event):
+    return event.get("queryStringParameters") or {}
 
 
 def handler(event, context):
@@ -430,7 +479,7 @@ def handler(event, context):
     path = event.get("rawPath", "/")
     # 拿掉 stage 前綴（$default stage 不會有，但保險起見）
     path = re.sub(r"^/(prod|dev|\$default)(?=/)", "", path).rstrip("/") or "/"
-    qs = event.get("queryStringParameters") or {}
+    qs = qs_of(event)
 
     if method == "OPTIONS":
         return respond(200, {})
@@ -454,21 +503,23 @@ def handler(event, context):
             if m:
                 return handle_kindergarten_punishments(cur, m.group(1))
 
+            if path.startswith("/api/reports"):
+                res = route_public_reports(cur, method, path, event)
+                if res is not None:
+                    return res
+
             # ---- 受保護端點：token 已由 API Gateway 驗過 ----
             if path.startswith("/api/secure/"):
-                identity = get_identity(event)
+                identity = auth.get_identity(event)
                 if identity is None:
                     # 正常情況不會走到這（API Gateway 會先回 401）；
                     # 除非有人把 route 的 authorizer 拿掉了。
-                    return respond(401, {"message": "需要登入"})
-                if path == "/api/secure/me":
-                    return handle_secure_me(identity)
-                if path == "/api/secure/kindergartens":
-                    return handle_secure_kindergartens(cur, qs, identity)
-                if path == "/api/secure/punishments":
-                    return handle_secure_punishments(cur, qs, identity)
+                    return error(401, "UNAUTHORIZED", "需要登入")
+                res = route_secure(cur, method, path, event, identity)
+                if res is not None:
+                    return res
 
-        return respond(404, {"message": f"Not found: {method} {path}"})
+        return error(404, "NOT_FOUND", f"Not found: {method} {path}")
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR {type(exc).__name__}: {exc}")
-        return respond(500, {"message": "Internal error", "detail": str(exc)})
+        return error(500, "INTERNAL_ERROR", "Internal error", {"detail": str(exc)})

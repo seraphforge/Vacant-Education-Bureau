@@ -59,6 +59,48 @@ Parameters:
     Default: ""
     Description: Cognito issuer URL. Empty disables auth.
 
+  # --------------------------------------------------------------------------
+  # Parent report settings (see API_SPEC.md and aws/README.md).
+  # --------------------------------------------------------------------------
+  MailMode:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - ses
+    Description: >
+      dev = do not send mail, return the OTP in the API response (needed while
+      SES is in sandbox). ses = really send through SES v2.
+
+  MailFrom:
+    Type: String
+    Default: ""
+    Description: >
+      Verified SES sender address. Required when MailMode=ses.
+
+  PublicBaseUrl:
+    Type: String
+    Default: ""
+    Description: >
+      Public site URL used to build the /report/<token> tracking link that is
+      emailed to the parent, e.g. https://xxxx.cloudfront.net
+
+  OtpPepper:
+    Type: String
+    Default: change-me-in-deploy-config
+    NoEcho: true
+    Description: >
+      Secret mixed into the HMAC of the email verification code. The code
+      itself is never stored, only HMAC(code, pepper).
+
+  UploadAllowedOrigins:
+    Type: String
+    Default: "*"
+    Description: >
+      Comma separated origins allowed to upload attachments straight to S3.
+      "*" is acceptable here because every upload still needs a presigned
+      policy signed by the Lambda.
+
 Conditions:
   HasAuth: !Not [!Equals [!Ref UserPoolIssuer, ""]]
 
@@ -78,6 +120,13 @@ Resources:
           ToPort: 3306
           CidrIp: 0.0.0.0/0
           Description: MySQL only
+        # Needed to reach the SES interface VPC endpoint below. There is still
+        # no route to the internet: the endpoint is a private ENI inside the VPC.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to VPC endpoints (SES)
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-lambda-sg"
@@ -91,6 +140,90 @@ Resources:
       ToPort: !Ref DbPort
       SourceSecurityGroupId: !Ref LambdaSecurityGroup
       Description: !Sub "${ProjectName} lambda to RDS MySQL"
+
+  # --------------------------------------------------------------------------
+  # SES over PrivateLink.
+  #
+  # The Lambda lives in a VPC with no NAT gateway, so it has no route to the
+  # public internet and cannot call the SES API directly. An interface VPC
+  # endpoint puts an ENI for SES inside our subnets; with PrivateDnsEnabled the
+  # normal SDK endpoint name resolves to that ENI, so boto3 needs no special
+  # configuration. This is ~10x cheaper than adding a NAT gateway.
+  # --------------------------------------------------------------------------
+  SesEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${ProjectName} SES VPC endpoint"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+          Description: HTTPS from the API lambda
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-ses-endpoint-sg"
+
+  SesVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      # "email" is the SES v2 API endpoint (email-smtp would be for SMTP).
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.email"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref SubnetIds
+      SecurityGroupIds:
+        - !Ref SesEndpointSecurityGroup
+
+  # --------------------------------------------------------------------------
+  # Attachment bucket for parent reports.
+  #
+  # Fully private. The browser uploads straight to S3 with a presigned POST
+  # (API Gateway caps payloads at 10MB, and the spec allows 5 files x 5MB),
+  # and both parents and staff read attachments through short lived presigned
+  # GET links. Signing happens locally in the Lambda, so no S3 VPC endpoint
+  # is required.
+  # --------------------------------------------------------------------------
+  AttachmentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-report-attachments-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods:
+              - POST
+              - GET
+              - HEAD
+            AllowedOrigins: !Split [",", !Ref UploadAllowedOrigins]
+            AllowedHeaders:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          # Only cleans up failed uploads. Real attachments are evidence for a
+          # case, so they are not expired automatically.
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
 
   # --------------------------------------------------------------------------
   # Lambda
@@ -108,6 +241,25 @@ Resources:
       ManagedPolicyArns:
         # CloudWatch Logs + permission to create ENIs inside the VPC
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: report-attachments-and-mail
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Objects only, and only inside the attachment bucket. The Lambda
+              # never needs to list or reconfigure the bucket.
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-report-attachments-${AWS::AccountId}/*"
+              # Sending only. Restricted to identities in this account, so this
+              # role cannot be used to manage SES or send from other identities.
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
 
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
@@ -141,6 +293,13 @@ Resources:
           DB_NAME: !Ref DbName
           DB_USER: !Ref DbUser
           DB_PASSWORD: !Ref DbPassword
+          # Parent report feature
+          MAIL_MODE: !Ref MailMode
+          MAIL_FROM: !Ref MailFrom
+          PUBLIC_BASE_URL: !Ref PublicBaseUrl
+          OTP_PEPPER: !Ref OtpPepper
+          OTP_TTL_MINUTES: "10"
+          ATTACH_BUCKET: !Ref AttachmentBucket
 
   # --------------------------------------------------------------------------
   # API Gateway HTTP API (cheaper and simpler than REST API)
@@ -157,6 +316,7 @@ Resources:
           - GET
           - POST
           - PUT
+          - PATCH
           - DELETE
           - OPTIONS
         AllowHeaders:
@@ -230,6 +390,58 @@ Resources:
       Target: !Sub "integrations/${ApiIntegration}"
 
   # --------------------------------------------------------------------------
+  # Parent report (public, no login).
+  #
+  # Listed one by one on purpose, same as the routes above: a new endpoint must
+  # be made public deliberately. The verification code flow is what protects
+  # these - a report only reaches the government side after the reporter proves
+  # they own the email address.
+  # --------------------------------------------------------------------------
+  RouteReportDraftCreate:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/reports/drafts"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteReportOtpVerify:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/reports/drafts/{id}/otp/verify"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteReportOtpResend:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/reports/drafts/{id}/otp/resend"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteReportAttachmentPresign:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/reports/drafts/{id}/attachments/presign"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  RouteReportAttachmentRegister:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /api/reports/drafts/{id}/attachments"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  # Tracking page. The token is the capability: whoever has the link can see
+  # the case, which is why the response never contains the reporter's email.
+  RouteReportTracking:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /api/reports/{token}"
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  # --------------------------------------------------------------------------
   # Authentication (only created when the auth stack has been deployed).
   #
   # A JWT authorizer makes API Gateway verify the Cognito token signature and
@@ -293,6 +505,17 @@ Resources:
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
 
+  # PATCH is used by the parent report status / assignee update.
+  RouteSecurePatch:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: HasAuth
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "PATCH /api/secure/{proxy+}"
+      Target: !Sub "integrations/${ApiIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+
   RouteSecureDelete:
     Type: AWS::ApiGatewayV2::Route
     Condition: HasAuth
@@ -329,3 +552,9 @@ Outputs:
   AuthEnabled:
     Description: Whether the JWT authorizer is attached to /api/secure/*
     Value: !If [HasAuth, "yes", "no"]
+  AttachmentBucketName:
+    Description: S3 bucket holding parent report attachments (private)
+    Value: !Ref AttachmentBucket
+  MailModeOut:
+    Description: dev = OTP returned in the API response, ses = real email
+    Value: !Ref MailMode
