@@ -12,11 +12,20 @@
 ## 執行順序
 
 ```bash
-# 1) 彙整所有 CSV 成統一長表
+# 0)（選用）抽取營運資料（招收人數、員工數、教保員數），彙整成 operating_long.csv
+python data/finance_pdf_cleaning/scripts/extract_financial_reports.py --operating-only --school-year 113 --kindergarten N01
+# 1) 彙整所有財報 CSV 成統一長表
 python data/finance_pdf_cleaning/analysis/build_long_table.py
-# 2) 計算特徵（YoY / Z-score / 衍生指標）
+# 2) 計算特徵（YoY / Z-score / 衍生指標）；若 operating_long.csv 存在會自動算每生支出、師生比
 python data/finance_pdf_cleaning/analysis/build_features.py
 ```
+
+## 營運資料 (operating_long.csv)
+
+由財報第 10 頁「一般概況」抽出，指標包含：核定招收人數、實際招收人數、學生人數
+（=實際招收人數）、員工人數、教保人員數。僅有 110～113（非收支類），109 無資料。
+`build_features.py` 偵測到此檔會自動 `outer merge`，計算每生人事費、每生支出、師生比；
+109 年因無營運資料，這些衍生指標為 `NaN`（不補 0）。
 
 輸出於 `analysis/outputs/`：
 

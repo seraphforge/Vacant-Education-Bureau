@@ -132,6 +132,15 @@ NOTES_PROMPT = """你正在處理幼兒園財報「財務報表附註」中的�
 - 若某主題在報告中標示為「無」，內容就填「無」。
 - 找不到的主題不要輸出該列。不要自行摘要或改寫，忠實抄錄。
 """
+OPERATING_PROMPT = """你正在處理幼兒園財報附註的「一般概況」段落（通常在第 10 頁）。
+請找出以下營運數字，輸出單一 JSON 物件，不要輸出 Markdown 或說明文字：
+{"核定招收人數": null, "實際招收人數": null, "員工人數": null, "教保人員數": null}
+對照規則：
+- 「核定及實際招收總人數：分別為 X 名及 Y 名」→ 核定招收人數=X、實際招收人數=Y。
+- 「員工人數均為 N 人（含教保人員 M 人）」→ 員工人數=N、教保人員數=M。
+  若員工人數列出兩個時點（例如截至 114 年及 113 年），請取本報告學年度（較新、較晚日期）的數字。
+- 只輸出純數字（去除「名」「人」等單位與逗號）。找不到的欄位填 null。不要自行推算。
+"""
 APPENDIX3_PROMPT = """你正在處理幼兒園財報的「附表三：各學年收支預決算比較表」。
 這張表通常橫跨兩頁圖片，請把兩頁視為同一張表，依表格由上到下逐列讀取，合併輸出。
 表格每列的項目名稱有階層（例如「收入」「教保費收入淨額」「教保費收入」為不同層級），
@@ -290,6 +299,16 @@ def parse_args() -> argparse.Namespace:
         "--income-prev-pages",
         default="7",
         help="前一年度收支餘絀表所在頁碼，預設 7",
+    )
+    parser.add_argument(
+        "--operating-only",
+        action="store_true",
+        help="抽取一般概況營運數字（招收人數、員工數、教保員數），彙整成 operating_long.csv",
+    )
+    parser.add_argument(
+        "--operating-pages",
+        default="10",
+        help="一般概況所在頁碼，預設 10",
     )
     parser.add_argument("--kindergarten", help="只處理指定幼兒園名稱或代碼")
     parser.add_argument("--school-year", help="只處理指定學年度，例如 113")
@@ -706,6 +725,65 @@ def request_notes(provider: str, images: list[Image.Image]) -> list[dict[str, An
         ),
     )
     return clean_table_response(response.text or "")
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    """解析模型回傳的單一 JSON 物件，保留原始鍵（不套用固定 FIELDS）。"""
+    text = (text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    candidate = fenced.group(1) if fenced else text
+    if not fenced:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            candidate = match.group(0)
+    parsed = json.loads(candidate)
+    if not isinstance(parsed, dict):
+        raise ValueError("模型回傳的 JSON 不是物件")
+    return parsed
+
+
+def request_operating(provider: str, images: list[Image.Image]) -> dict[str, Any]:
+    """抽取一般概況的營運數字，回傳單一 JSON 物件（dict），保留原始鍵。"""
+    if provider == "openai":
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        content: list[dict[str, Any]] = [{"type": "text", "text": OPERATING_PROMPT}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image_to_data_url(image)}}
+            for image in images
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": content}],
+        )
+        return _parse_json_object(response.choices[0].message.content or "")
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=types.HttpOptions(timeout=120000),
+    )
+    contents: list[Any] = [OPERATING_PROMPT]
+    for image in images:
+        buffer = BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=95)
+        contents.append(
+            types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
+        )
+    response = client.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        contents=contents,
+        config=types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
+    )
+    return _parse_json_object(response.text or "")
 
 
 def request_table(
@@ -1311,6 +1389,87 @@ def extract_income_prev_only(
     write_statement_validation_csv(validation_output, pdf_path, rows)
 
 
+def _num(value) -> float | None:
+    if value is None:
+        return None
+    s = str(value).strip().replace(",", "").replace("名", "").replace("人", "")
+    if s in ("", "-", "None", "null"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def extract_operating_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    long_output: Path,
+) -> None:
+    """抽取一般概況營運數字（第 10 頁），append 進共用長表 operating_long.csv。
+
+    長表欄位：園代碼, 園名, 學年度, 指標, 數值, 資料類別
+    指標包含：核定招收人數、實際招收人數、員工人數、教保人員數、學生人數（=實際招收人數）。
+    """
+    images = _convert_pages(pdf_path, dpi, poppler_path, pages)
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取一般概況")
+    page = min(pages)
+    print(f"  抽取一般概況營運數字（第 {page} 頁）")
+    data = request_operating(provider, images)
+
+    code = report_prefix(pdf_path)[:3] if report_prefix(pdf_path)[:1] == "N" else None
+    m = re.match(r"(N\d+)(.+?)_", pdf_path.name)
+    code = m.group(1) if m else None
+    name = m.group(2) if m else pdf_path.stem
+    year = report_school_year(pdf_path)
+
+    approved = _num(data.get("核定招收人數"))
+    actual = _num(data.get("實際招收人數"))
+    staff = _num(data.get("員工人數"))
+    teachers = _num(data.get("教保人員數"))
+
+    metrics = {
+        "核定招收人數": approved,
+        "實際招收人數": actual,
+        "學生人數": actual,  # 以實際招收人數作為學生人數，供每生/師生比計算
+        "員工人數": staff,
+        "教保人員數": teachers,
+    }
+
+    long_output.parent.mkdir(parents=True, exist_ok=True)
+    columns = ["園代碼", "園名", "學年度", "指標", "數值", "資料類別"]
+    existing: list[dict[str, Any]] = []
+    if long_output.exists():
+        with long_output.open("r", encoding="utf-8-sig", newline="") as f:
+            existing = list(csv.DictReader(f))
+    # 移除同園同年舊資料（可重跑覆蓋）
+    existing = [
+        r
+        for r in existing
+        if not (r.get("園代碼") == code and str(r.get("學年度")) == str(year))
+    ]
+    for metric, value in metrics.items():
+        existing.append(
+            {
+                "園代碼": code,
+                "園名": name,
+                "學年度": year,
+                "指標": metric,
+                "數值": "" if value is None else value,
+                "資料類別": "營運",
+            }
+        )
+    existing.sort(key=lambda r: (r.get("園代碼") or "", str(r.get("學年度")), r.get("指標") or ""))
+    with long_output.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(existing)
+
+
 def extract_pdf(
     pdf_path: Path,
     provider: str,
@@ -1448,6 +1607,10 @@ def main() -> int:
     balance_sheet_pages = [int(p) for p in str(args.balance_sheet_pages).split(",") if p.strip()]
     income_pages = [int(p) for p in str(args.income_pages).split(",") if p.strip()]
     income_prev_pages = [int(p) for p in str(args.income_prev_pages).split(",") if p.strip()]
+    operating_pages = [int(p) for p in str(args.operating_pages).split(",") if p.strip()]
+    operating_long_output = (
+        Path(__file__).resolve().parents[1] / "analysis" / "outputs" / "operating_long.csv"
+    )
     pdf_files = sorted(args.input_dir.rglob("*.pdf"))
     if args.kindergarten:
         query = args.kindergarten.casefold()
@@ -1519,7 +1682,16 @@ def main() -> int:
             / f"{prefix}_{prev_year}學年度收支餘絀表驗證.csv"
         )
         try:
-            if args.income_prev_only:
+            if args.operating_only:
+                extract_operating_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    operating_pages,
+                    operating_long_output,
+                )
+            elif args.income_prev_only:
                 extract_income_prev_only(
                     pdf_path,
                     args.provider,
@@ -1636,6 +1808,7 @@ def main() -> int:
             or args.balance_sheet_only
             or args.income_only
             or args.income_prev_only
+            or args.operating_only
         )
         if not args.ocr and not args.index_only and not table_only_mode:
             report_output = school_output_dir(data_root / "processed", pdf_path) / f"{prefix}_財報摘要.csv"
@@ -1651,6 +1824,7 @@ def main() -> int:
         or args.balance_sheet_only
         or args.income_only
         or args.income_prev_only
+        or args.operating_only
     ):
         print(f"完成指定表格抽取，共 {len(rows)} 份 PDF")
     elif args.notes_only:
