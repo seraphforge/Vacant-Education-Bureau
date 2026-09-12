@@ -30,8 +30,8 @@ import {
 export class ReportService {
   private http = inject(HttpClient);
   private base = `${environment.apiBaseUrl}/api`;
-  /** 家長回報 §2/§3 尚未上線，維持 mock；後端完成後設為 false。 */
-  private readonly mock = true;
+  /** 家長回報 §2/§3 後端已上線，改走真實 API。 */
+  private readonly mock = false;
 
   /** mock 用：記住每張草稿正確的驗證碼與剩餘嘗試次數 */
   private mockDrafts = new Map<number, { otp: string; attemptsLeft: number; email: string }>();
