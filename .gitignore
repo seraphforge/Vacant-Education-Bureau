@@ -293,3 +293,6 @@ bastion-key.ppk
 
 # 財報原始 PDF（不納入版控，屬原始資料來源）
 data/finance_pdf_cleaning/raw/**/*.pdf
+
+# Tesseract OCR 模型（可重新下載的第三方資產，不納入版控）
+data/finance_pdf_cleaning/tessdata/*.traineddata

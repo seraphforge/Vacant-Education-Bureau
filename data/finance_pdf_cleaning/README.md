@@ -91,11 +91,19 @@ python data/finance_pdf_cleaning/scripts/extract_financial_reports.py --page-bat
 
 每批完成後會自動記錄進度至與 CSV 同名的 `.checkpoint.json`。若中途停止，重新執行相同指令即可從上次完成的頁面繼續，不會重跑已完成頁面。
 
-第 5 頁固定先以資產負債表專用格式抽取，輸出至 `balance_sheet.csv`；一般財報欄位抽取會跳過第 5 頁，避免表格數字誤配。可用 `--table-output` 自訂表格 CSV 路徑。
+第 5 頁固定先以資產負債表專用格式抽取，輸出至 `資產負債表.csv`；第 6 頁固定以本年度收支餘絀表格式抽取，輸出至 `<學年度>學年度收支餘絀表.csv`。一般財報欄位抽取會跳過第 5 頁，避免表格數字誤配。可用 `--table-output` 自訂表格 CSV 輸出目錄。
 
-抽取第 5 頁後會自動產生 `balance_sheet_validation.csv`，驗證資產總計、負債總額、餘絀總額，以及負債加餘絀是否相等；`結果` 欄為 `通過` 或 `不一致`。
+抽取第 5 頁後會自動產生 `資產負債表加總驗證.csv`，驗證資產總計、負債總額、餘絀總額，以及負債加餘絀是否相等；抽取第 6 頁後會產生 `<學年度>學年度收支餘絀表驗證.csv`。`結果` 欄為 `通過` 或 `不一致`。
 
 `--page-batch-size 0` 可恢復整份 PDF 一次送出，但不建議在免費 API 使用。
+
+### 其他常用參數
+
+- `--kindergarten`：只處理指定幼兒園名稱或代碼（例如 `安溪` 或 `N01`）。
+- `--school-year`：只處理指定學年度（例如 `113`）。
+- `--index-only`：只建立排除第 5 頁的財報頁碼索引，不呼叫模型。
+- `--ocr`：改用本機 Tesseract OCR 抽取第 5、6 頁，不呼叫 Gemini 或 OpenAI。
+- `--validation-output`：自訂驗算 CSV 的輸出目錄。
 
 Windows 若未將 Poppler 加入 PATH，請另外安裝 Poppler，並執行時指定：
 

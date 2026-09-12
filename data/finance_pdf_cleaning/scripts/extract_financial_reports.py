@@ -162,11 +162,6 @@ def parse_args() -> argparse.Namespace:
         help="只建立排除第 5 頁的財報頁碼索引，不呼叫模型",
     )
     parser.add_argument(
-        "--financial-pages-only",
-        action="store_true",
-        help="只抽取第 5 頁資產負債表與第 6 頁本年度收支餘絀表",
-    )
-    parser.add_argument(
         "--ocr",
         action="store_true",
         help="使用本機 Tesseract OCR，不呼叫 Gemini 或 OpenAI",
@@ -600,34 +595,6 @@ def extract_ocr_pages_only(
         )
 
 
-def extract_financial_pages_only(
-    pdf_path: Path,
-    provider: str,
-    dpi: int,
-    poppler_path: Path | None,
-    table_output: Path,
-    validation_output: Path,
-    statement_output: Path,
-    statement_validation_output: Path,
-) -> None:
-    convert_options: dict[str, Any] = {"dpi": dpi, "fmt": "jpeg"}
-    if poppler_path:
-        convert_options["poppler_path"] = str(poppler_path)
-    images = convert_from_path(str(pdf_path), **convert_options)
-    if len(images) < 6:
-        raise ValueError("PDF 少於 6 頁，無法抽取第 5、6 頁")
-    print("  抽取第 5 頁資產負債表")
-    balance_rows = request_balance_sheet(provider, images[4])
-    write_balance_sheet_csv(table_output, pdf_path, balance_rows)
-    write_balance_sheet_validation_csv(validation_output, pdf_path, balance_rows)
-    print("  抽取第 6 頁收支餘絀表")
-    statement_rows = request_income_statement(provider, images[5])
-    write_statement_csv(statement_output, pdf_path, statement_rows)
-    write_statement_validation_csv(
-        statement_validation_output, pdf_path, statement_rows
-    )
-
-
 def write_balance_sheet_csv(
     output: Path,
     pdf_path: Path,
@@ -763,6 +730,8 @@ def extract_pdf(
     checkpoint_key: str,
     table_output: Path,
     validation_output: Path,
+    statement_output: Path,
+    statement_validation_output: Path,
     page_index_output: Path,
     index_only: bool,
 ) -> dict[str, Any]:
@@ -802,6 +771,26 @@ def extract_pdf(
             "next_page": start_page,
             "completed": False,
             "balance_sheet_completed": True,
+            "statement_completed": bool(saved.get("statement_completed")),
+            "merged": merged,
+        }
+        checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        with checkpoint_file.open("w", encoding="utf-8") as file:
+            json.dump(checkpoint, file, ensure_ascii=False, indent=2)
+
+    if len(images) >= 6 and not saved.get("statement_completed"):
+        print("  處理第 6 頁本年度收支餘絀表")
+        statement_rows = request_income_statement(provider, images[5])
+        write_statement_csv(statement_output, pdf_path, statement_rows)
+        write_statement_validation_csv(
+            statement_validation_output, pdf_path, statement_rows
+        )
+        saved["statement_completed"] = True
+        checkpoint[checkpoint_key] = {
+            "next_page": start_page,
+            "completed": False,
+            "balance_sheet_completed": bool(saved.get("balance_sheet_completed")),
+            "statement_completed": True,
             "merged": merged,
         }
         checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
@@ -829,6 +818,7 @@ def extract_pdf(
             "next_page": page_position + len(batch_indexes),
             "completed": page_position + len(batch_indexes) >= len(page_indexes),
             "balance_sheet_completed": True,
+            "statement_completed": True,
             "merged": merged,
         }
         checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
@@ -858,8 +848,6 @@ def main() -> int:
         raise ValueError("provider 必須是 gemini 或 openai")
     if not args.index_only and not args.ocr:
         ensure_api_key(args.provider)
-    if args.ocr:
-        args.financial_pages_only = True
     pdf_files = sorted(args.input_dir.rglob("*.pdf"))
     if args.kindergarten:
         query = args.kindergarten.casefold()
@@ -907,17 +895,6 @@ def main() -> int:
                     args.poppler_path,
                     source_dir,
                 )
-            elif args.financial_pages_only:
-                extract_financial_pages_only(
-                    pdf_path,
-                    args.provider,
-                    args.dpi,
-                    args.poppler_path,
-                    table_output,
-                    validation_output,
-                    statement_output,
-                    statement_validation_output,
-                )
             else:
                 row.update(
                     extract_pdf(
@@ -931,6 +908,8 @@ def main() -> int:
                         str(pdf_path.relative_to(args.input_dir)),
                         table_output,
                         validation_output,
+                        statement_output,
+                        statement_validation_output,
                         page_index_output,
                         args.index_only,
                     )
@@ -942,7 +921,7 @@ def main() -> int:
             row["錯誤訊息"] = str(error)
             print(f"  失敗：{error}", file=sys.stderr)
         rows.append(row)
-        if not args.financial_pages_only and not args.ocr and not args.index_only:
+        if not args.ocr and not args.index_only:
             report_output = school_output_dir(data_root / "processed", pdf_path) / "財報摘要.csv"
             with report_output.open("w", newline="", encoding="utf-8-sig") as report_file:
                 writer = csv.DictWriter(report_file, fieldnames=CSV_COLUMNS)
