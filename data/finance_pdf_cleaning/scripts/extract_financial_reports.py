@@ -97,6 +97,30 @@ INCOME_STATEMENT_PROMPT = """你正在處理幼兒園財報第 6 頁的收支餘
 {"科目": "表格中的完整科目名稱", "金額": "該科目金額", "年度": "報告學年度"}
 保留括號負數、逗號與原始幣別；無法辨識的金額填 null。不要自行計算或四捨五入。
 """
+NOTES_PROMPT = """你正在處理幼兒園財報「財務報表附註」中的段落，圖片可能包含多頁。
+請只抽取以下三個主題段落，其餘段落（如賸餘款執行概況、重大之期後事項、法源依據）一律忽略：
+1. 關係人交易
+2. 質抵押資產
+3. 重大承諾事項及或有事項
+
+請輸出 JSON 陣列，不要輸出 Markdown 或說明文字。每個主題一列，格式必須是：
+{"章節": "關係人交易", "內容": "該段落的完整文字"}
+規則：
+- 章節只能是「關係人交易」「質抵押資產」「重大承諾事項及或有事項」三者之一，忠實使用報告中的標題文字。
+- 內容請完整抄錄該段落文字，包含子項目編號與敘述；若段落內有小表格，請以「欄位：值」的方式併入內容文字，保留金額的逗號與括號。
+- 若某主題在報告中標示為「無」，內容就填「無」。
+- 找不到的主題不要輸出該列。不要自行摘要或改寫，忠實抄錄。
+"""
+APPENDIX3_PROMPT = """你正在處理幼兒園財報的「附表三：各學年收支預決算比較表」。
+這張表通常橫跨兩頁圖片，請把兩頁視為同一張表，依表格由上到下逐列讀取，合併輸出。
+表格每列的項目名稱有階層（例如「收入」「教保費收入淨額」「教保費收入」為不同層級），
+每個項目分別有本年度與前一年度的四個數值：預算數、決算數、決算數與預算數之差異、執行率%。
+
+請輸出 JSON 陣列，不要輸出 Markdown 或說明文字。每列格式必須是：
+{"項目": "表格中的完整項目名稱", "本年度預算數": "", "本年度決算數": "", "本年度差異": "", "本年度執行率": "", "前年度預算數": "", "前年度決算數": "", "前年度差異": "", "前年度執行率": ""}
+保留括號負數與逗號；表格中的破折號「-」請填 null；無法辨識的值也填 null。
+執行率欄位只保留數字（例如 111）。不要自行計算或四捨五入，忠實抄錄表格內容。
+"""
 
 
 def parse_args() -> argparse.Namespace:
@@ -166,6 +190,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="使用本機 Tesseract OCR，不呼叫 Gemini 或 OpenAI",
     )
+    parser.add_argument(
+        "--appendix3-only",
+        action="store_true",
+        help="只抽取第 26、27 頁的附表三：各學年收支預決算比較表",
+    )
+    parser.add_argument(
+        "--appendix3-pages",
+        default="26,27",
+        help="附表三所在頁碼，以逗號分隔，預設 26,27",
+    )
+    parser.add_argument(
+        "--notes-only",
+        action="store_true",
+        help="只抽取財務報表附註段落（關係人交易、質抵押、重大承諾與或有事項）",
+    )
+    parser.add_argument(
+        "--notes-pages",
+        default="22,23",
+        help="附註段落所在頁碼，以逗號分隔，預設 22,23",
+    )
     parser.add_argument("--kindergarten", help="只處理指定幼兒園名稱或代碼")
     parser.add_argument("--school-year", help="只處理指定學年度，例如 113")
     return parser.parse_args()
@@ -228,6 +272,12 @@ def report_source(pdf_path: Path, input_dir: Path) -> dict[str, str]:
         "幼兒園名稱（檔名）": kindergarten_name,
         "報告學年度": f"{report_school_year(pdf_path)}學年度",
     }
+
+
+def report_prefix(pdf_path: Path) -> str:
+    """從檔名取出「代碼+園名」前綴，例如 N01安溪；取不到時退回檔名去除副檔名。"""
+    match = re.match(r"(?P<prefix>N\d+.+?)_\d{3}學年度", pdf_path.stem)
+    return match.group("prefix") if match else pdf_path.stem
 
 
 def pdf_output_path(base: Path, pdf_path: Path, suffix: str) -> Path:
@@ -450,6 +500,156 @@ def request_income_statement(provider: str, image: Image.Image) -> list[dict[str
     return clean_table_response(response.text or "")
 
 
+def request_appendix3(provider: str, images: list[Image.Image]) -> list[dict[str, Any]]:
+    """抽取附表三：各學年收支預決算比較表（通常橫跨兩頁）。"""
+    if provider == "openai":
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        content: list[dict[str, Any]] = [{"type": "text", "text": APPENDIX3_PROMPT}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image_to_data_url(image)}}
+            for image in images
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": content}],
+        )
+        return clean_table_response(response.choices[0].message.content or "")
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=types.HttpOptions(timeout=120000),
+    )
+    contents: list[Any] = [APPENDIX3_PROMPT]
+    for image in images:
+        buffer = BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=95)
+        contents.append(
+            types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
+        )
+    response = client.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        contents=contents,
+        config=types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
+    )
+    return clean_table_response(response.text or "")
+
+
+def write_appendix3_csv(
+    output: Path,
+    pdf_path: Path,
+    rows: list[dict[str, Any]],
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    current_year = report_school_year(pdf_path)
+    columns = [
+        "檔案名稱",
+        "項目",
+        f"{current_year}學年度預算數",
+        f"{current_year}學年度決算數",
+        f"{current_year}學年度決算與預算差異",
+        f"{current_year}學年度執行率",
+        f"{current_year - 1}學年度預算數",
+        f"{current_year - 1}學年度決算數",
+        f"{current_year - 1}學年度決算與預算差異",
+        f"{current_year - 1}學年度執行率",
+    ]
+    with output.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "檔案名稱": pdf_path.name,
+                    "項目": row.get("項目"),
+                    f"{current_year}學年度預算數": row.get("本年度預算數"),
+                    f"{current_year}學年度決算數": row.get("本年度決算數"),
+                    f"{current_year}學年度決算與預算差異": row.get("本年度差異"),
+                    f"{current_year}學年度執行率": row.get("本年度執行率"),
+                    f"{current_year - 1}學年度預算數": row.get("前年度預算數"),
+                    f"{current_year - 1}學年度決算數": row.get("前年度決算數"),
+                    f"{current_year - 1}學年度決算與預算差異": row.get("前年度差異"),
+                    f"{current_year - 1}學年度執行率": row.get("前年度執行率"),
+                }
+            )
+
+
+def request_notes(provider: str, images: list[Image.Image]) -> list[dict[str, Any]]:
+    """抽取財務報表附註段落：關係人交易、質抵押資產、重大承諾事項及或有事項。"""
+    if provider == "openai":
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        content: list[dict[str, Any]] = [{"type": "text", "text": NOTES_PROMPT}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image_to_data_url(image)}}
+            for image in images
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": content}],
+        )
+        return clean_table_response(response.choices[0].message.content or "")
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=types.HttpOptions(timeout=120000),
+    )
+    contents: list[Any] = [NOTES_PROMPT]
+    for image in images:
+        buffer = BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=95)
+        contents.append(
+            types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
+        )
+    response = client.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        contents=contents,
+        config=types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
+    )
+    return clean_table_response(response.text or "")
+
+
+def write_notes_csv(
+    output: Path,
+    pdf_path: Path,
+    rows: list[dict[str, Any]],
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    wanted = ["關係人交易", "質抵押資產", "重大承諾事項及或有事項"]
+    by_section = {str(row.get("章節") or "").strip(): row.get("內容") for row in rows}
+    columns = ["檔案名稱", "報告學年度", "章節", "內容"]
+    with output.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=columns)
+        writer.writeheader()
+        for section in wanted:
+            writer.writerow(
+                {
+                    "檔案名稱": pdf_path.name,
+                    "報告學年度": f"{report_school_year(pdf_path)}學年度",
+                    "章節": section,
+                    "內容": by_section.get(section),
+                }
+            )
+
+
 def write_statement_csv(
     output: Path,
     pdf_path: Path,
@@ -593,6 +793,56 @@ def extract_ocr_pages_only(
             page_number,
             text,
         )
+
+
+def extract_appendix3_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+) -> None:
+    """只抽取附表三：各學年收支預決算比較表（預設第 26、27 頁）。"""
+    convert_options: dict[str, Any] = {"dpi": dpi, "fmt": "jpeg"}
+    if poppler_path:
+        convert_options["poppler_path"] = str(poppler_path)
+    images = convert_from_path(
+        str(pdf_path),
+        first_page=min(pages),
+        last_page=max(pages),
+        **convert_options,
+    )
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取附表三")
+    print(f"  抽取附表三（第 {'、'.join(str(p) for p in pages)} 頁）")
+    rows = request_appendix3(provider, images)
+    write_appendix3_csv(output, pdf_path, rows)
+
+
+def extract_notes_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+) -> None:
+    """只抽取財務報表附註段落（關係人交易、質抵押、重大承諾與或有事項，預設第 22、23 頁）。"""
+    convert_options: dict[str, Any] = {"dpi": dpi, "fmt": "jpeg"}
+    if poppler_path:
+        convert_options["poppler_path"] = str(poppler_path)
+    images = convert_from_path(
+        str(pdf_path),
+        first_page=min(pages),
+        last_page=max(pages),
+        **convert_options,
+    )
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取附註段落")
+    print(f"  抽取附註段落（第 {'、'.join(str(p) for p in pages)} 頁）")
+    rows = request_notes(provider, images)
+    write_notes_csv(output, pdf_path, rows)
 
 
 def write_balance_sheet_csv(
@@ -848,6 +1098,8 @@ def main() -> int:
         raise ValueError("provider 必須是 gemini 或 openai")
     if not args.index_only and not args.ocr:
         ensure_api_key(args.provider)
+    appendix3_pages = [int(p) for p in str(args.appendix3_pages).split(",") if p.strip()]
+    notes_pages = [int(p) for p in str(args.notes_pages).split(",") if p.strip()]
     pdf_files = sorted(args.input_dir.rglob("*.pdf"))
     if args.kindergarten:
         query = args.kindergarten.casefold()
@@ -872,23 +1124,53 @@ def main() -> int:
         row: dict[str, Any] = {column: None for column in CSV_COLUMNS}
         row.update(report_source(pdf_path, args.input_dir))
         source_dir = school_output_dir(table_output_base, pdf_path)
-        table_output = table_output_path(table_output_base, pdf_path, "資產負債表")
+        prefix = report_prefix(pdf_path)
+        school_year = report_school_year(pdf_path)
+        table_output = table_output_path(table_output_base, pdf_path, f"{prefix}_資產負債表")
         validation_output = table_output_path(
-            validation_output_base, pdf_path, "資產負債表加總驗證"
+            validation_output_base, pdf_path, f"{prefix}_資產負債表加總驗證"
         )
         statement_output = table_output_path(
-            table_output_base, pdf_path, f"{report_school_year(pdf_path)}學年度收支餘絀表"
+            table_output_base, pdf_path, f"{prefix}_{school_year}學年度收支餘絀表"
         )
         statement_validation_output = table_output_path(
             validation_output_base,
             pdf_path,
-            f"{report_school_year(pdf_path)}學年度收支餘絀表驗證",
+            f"{prefix}_{school_year}學年度收支餘絀表驗證",
         )
         page_index_output = pdf_output_path(
             school_output_dir(page_index_base, pdf_path), pdf_path, "page_index"
         )
+        appendix3_output = table_output_path(
+            table_output_base,
+            pdf_path,
+            f"{prefix}_附表三_各學年收支預決算比較表",
+        )
+        notes_output = table_output_path(
+            table_output_base,
+            pdf_path,
+            f"{prefix}_財務報表附註_關係人交易質抵押重大承諾",
+        )
         try:
-            if args.ocr:
+            if args.notes_only:
+                extract_notes_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    notes_pages,
+                    notes_output,
+                )
+            elif args.appendix3_only:
+                extract_appendix3_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    appendix3_pages,
+                    appendix3_output,
+                )
+            elif args.ocr:
                 extract_ocr_pages_only(
                     pdf_path,
                     args.dpi,
@@ -921,14 +1203,18 @@ def main() -> int:
             row["錯誤訊息"] = str(error)
             print(f"  失敗：{error}", file=sys.stderr)
         rows.append(row)
-        if not args.ocr and not args.index_only:
-            report_output = school_output_dir(data_root / "processed", pdf_path) / "財報摘要.csv"
+        if not args.ocr and not args.index_only and not args.appendix3_only and not args.notes_only:
+            report_output = school_output_dir(data_root / "processed", pdf_path) / f"{prefix}_財報摘要.csv"
             with report_output.open("w", newline="", encoding="utf-8-sig") as report_file:
                 writer = csv.DictWriter(report_file, fieldnames=CSV_COLUMNS)
                 writer.writeheader()
                 writer.writerow(row)
 
-    if not args.index_only and not args.ocr:
+    if args.notes_only:
+        print(f"完成附註段落抽取，共 {len(rows)} 份 PDF")
+    elif args.appendix3_only:
+        print(f"完成附表三抽取，共 {len(rows)} 份 PDF")
+    elif not args.index_only and not args.ocr:
         with args.output.open("w", newline="", encoding="utf-8-sig") as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
             writer.writeheader()

@@ -104,6 +104,18 @@ python data/finance_pdf_cleaning/scripts/extract_financial_reports.py --page-bat
 - `--index-only`：只建立排除第 5 頁的財報頁碼索引，不呼叫模型。
 - `--ocr`：改用本機 Tesseract OCR 抽取第 5、6 頁，不呼叫 Gemini 或 OpenAI。
 - `--validation-output`：自訂驗算 CSV 的輸出目錄。
+- `--appendix3-only`：只抽取附表三「各學年收支預決算比較表」（跨兩頁），逐列輸出項目與本年度／前一年度的預算數、決算數、差異、執行率，存成 `附表三_各學年收支預決算比較表.csv`。
+- `--appendix3-pages`：附表三所在頁碼，以逗號分隔，預設 `26,27`；若某園頁碼不同可自行指定。
+- `--notes-only`：只抽取財務報表附註的三個段落（關係人交易、質抵押資產、重大承諾事項及或有事項），逐段輸出章節與內容，存成 `<前綴>_財務報表附註_關係人交易質抵押重大承諾.csv`。
+- `--notes-pages`：附註段落所在頁碼，以逗號分隔，預設 `22,23`。
+
+所有表格 CSV 皆以「代碼＋園名」前綴命名，例如 `N01安溪_資產負債表.csv`、`N02山北_附表三_各學年收支預決算比較表.csv`。
+
+抽取附表三範例（指定園所與學年度）：
+
+```bash
+python data/finance_pdf_cleaning/scripts/extract_financial_reports.py --appendix3-only --school-year 113 --kindergarten N01
+```
 
 Windows 若未將 Poppler 加入 PATH，請另外安裝 Poppler，並執行時指定：
 
