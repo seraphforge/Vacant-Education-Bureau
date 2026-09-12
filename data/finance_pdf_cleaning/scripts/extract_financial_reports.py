@@ -261,6 +261,26 @@ def parse_args() -> argparse.Namespace:
         default="28,32",
         help="附表四頁碼範圍，起訖以逗號分隔，預設 28,32",
     )
+    parser.add_argument(
+        "--balance-sheet-only",
+        action="store_true",
+        help="只抽取資產負債表（含加總驗證）",
+    )
+    parser.add_argument(
+        "--balance-sheet-pages",
+        default="5",
+        help="資產負債表所在頁碼，預設 5",
+    )
+    parser.add_argument(
+        "--income-only",
+        action="store_true",
+        help="只抽取本年度收支餘絀表（含驗證）",
+    )
+    parser.add_argument(
+        "--income-pages",
+        default="6",
+        help="收支餘絀表所在頁碼，預設 6",
+    )
     parser.add_argument("--kindergarten", help="只處理指定幼兒園名稱或代碼")
     parser.add_argument("--school-year", help="只處理指定學年度，例如 113")
     return parser.parse_args()
@@ -1216,6 +1236,44 @@ def write_balance_sheet_validation_csv(
             writer.writerow(check)
 
 
+def extract_balance_sheet_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+    validation_output: Path,
+) -> None:
+    """只抽取資產負債表（預設第 5 頁），並產生加總驗證。"""
+    images = _convert_pages(pdf_path, dpi, poppler_path, pages)
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取資產負債表")
+    print(f"  抽取資產負債表（第 {'、'.join(str(p) for p in pages)} 頁）")
+    rows = request_balance_sheet(provider, images[0])
+    write_balance_sheet_csv(output, pdf_path, rows)
+    write_balance_sheet_validation_csv(validation_output, pdf_path, rows)
+
+
+def extract_income_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+    validation_output: Path,
+) -> None:
+    """只抽取本年度收支餘絀表（預設第 6 頁），並產生驗證。"""
+    images = _convert_pages(pdf_path, dpi, poppler_path, pages)
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取收支餘絀表")
+    print(f"  抽取收支餘絀表（第 {'、'.join(str(p) for p in pages)} 頁）")
+    rows = request_income_statement(provider, images[0])
+    write_statement_csv(output, pdf_path, rows)
+    write_statement_validation_csv(validation_output, pdf_path, rows)
+
+
 def extract_pdf(
     pdf_path: Path,
     provider: str,
@@ -1350,6 +1408,8 @@ def main() -> int:
     cash_flow_pages = [int(p) for p in str(args.cash_flow_pages).split(",") if p.strip()]
     appendix2_pages = [int(p) for p in str(args.appendix2_pages).split(",") if p.strip()]
     appendix4_pages = [int(p) for p in str(args.appendix4_pages).split(",") if p.strip()]
+    balance_sheet_pages = [int(p) for p in str(args.balance_sheet_pages).split(",") if p.strip()]
+    income_pages = [int(p) for p in str(args.income_pages).split(",") if p.strip()]
     pdf_files = sorted(args.input_dir.rglob("*.pdf"))
     if args.kindergarten:
         query = args.kindergarten.casefold()
@@ -1411,7 +1471,27 @@ def main() -> int:
             table_output_base, pdf_path, f"{prefix}_附表四_財產清冊"
         )
         try:
-            if args.cash_flow_only:
+            if args.balance_sheet_only:
+                extract_balance_sheet_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    balance_sheet_pages,
+                    table_output,
+                    validation_output,
+                )
+            elif args.income_only:
+                extract_income_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    income_pages,
+                    statement_output,
+                    statement_validation_output,
+                )
+            elif args.cash_flow_only:
                 extract_cash_flow_only(
                     pdf_path,
                     args.provider,
@@ -1495,6 +1575,8 @@ def main() -> int:
             or args.cash_flow_only
             or args.appendix2_only
             or args.appendix4_only
+            or args.balance_sheet_only
+            or args.income_only
         )
         if not args.ocr and not args.index_only and not table_only_mode:
             report_output = school_output_dir(data_root / "processed", pdf_path) / f"{prefix}_財報摘要.csv"
@@ -1503,7 +1585,13 @@ def main() -> int:
                 writer.writeheader()
                 writer.writerow(row)
 
-    if args.cash_flow_only or args.appendix2_only or args.appendix4_only:
+    if (
+        args.cash_flow_only
+        or args.appendix2_only
+        or args.appendix4_only
+        or args.balance_sheet_only
+        or args.income_only
+    ):
         print(f"完成指定表格抽取，共 {len(rows)} 份 PDF")
     elif args.notes_only:
         print(f"完成附註段落抽取，共 {len(rows)} 份 PDF")
