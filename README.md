@@ -22,7 +22,7 @@
 
 ## 技術棧
 
-- 前端：Angular
+- 前端：Angular, PrimeNG
 - 後端：*pending*
 - 資料庫：*pending*
 - AI：*pending*
@@ -30,5 +30,7 @@
 ## 系統架構
 
 ## 貢獻者
+
+<img src = "https://contrib.rocks/image?repo = seraphforge/Vacant-Education-Bureau"/>
 
 ## 授權條款
