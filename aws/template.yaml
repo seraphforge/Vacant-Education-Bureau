@@ -39,7 +39,7 @@ Parameters:
     Default: "3306"
   DbName:
     Type: String
-    Default: moe
+    Default: readme
   DbUser:
     Type: String
   DbPassword:

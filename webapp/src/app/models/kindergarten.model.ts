@@ -1,4 +1,4 @@
-/** 對應資料庫 moe.kindergarten 一列 */
+/** 對應資料庫 readme.kindergarten 一列 */
 export interface Kindergarten {
   id: number;
   academic_year: string;

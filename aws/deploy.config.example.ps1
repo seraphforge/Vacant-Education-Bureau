@@ -9,7 +9,7 @@ $Config = @{
     # RDS 實例名稱，deploy.ps1 會自動查出 VPC / Subnet / SecurityGroup
     DbInstanceId  = "my-mysql-db"
 
-    DbName        = "moe"
+    DbName        = "readme"
     DbUser        = "admin"
     DbPassword    = "CHANGE_ME"
 }

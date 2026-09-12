@@ -24,7 +24,7 @@ DB_HOST = os.environ["DB_HOST"]
 DB_PORT = int(os.environ.get("DB_PORT", "3306"))
 DB_USER = os.environ["DB_USER"]
 DB_PASSWORD = os.environ["DB_PASSWORD"]
-DB_NAME = os.environ.get("DB_NAME", "moe")
+DB_NAME = os.environ.get("DB_NAME", "readme")
 
 # 只允許排序這些欄位，避免 SQL injection
 SORTABLE = {

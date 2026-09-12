@@ -15,7 +15,7 @@ API Gateway (HTTP API)      ← 對外的網址，負責收 request
 Lambda「ntpc-kg-api」        ← 我們的 Python 程式，收到請求才啟動、跑完就休眠
     │  MySQL 3306（走 VPC 內網）
     ▼
-RDS MySQL「my-mysql-db」     ← 資料庫，schema = moe，table = kindergarten
+RDS MySQL「my-mysql-db」     ← 資料庫，schema = readme，table = kindergarten
 ```
 
 ### 三個名詞（給沒有 AWS 經驗的人）
