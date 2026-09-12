@@ -281,6 +281,16 @@ def parse_args() -> argparse.Namespace:
         default="6",
         help="收支餘絀表所在頁碼，預設 6",
     )
+    parser.add_argument(
+        "--income-prev-only",
+        action="store_true",
+        help="抽取前一年度收支餘絀表（第 7 頁），學年度標為本檔減 1，用以補齊 109 年",
+    )
+    parser.add_argument(
+        "--income-prev-pages",
+        default="7",
+        help="前一年度收支餘絀表所在頁碼，預設 7",
+    )
     parser.add_argument("--kindergarten", help="只處理指定幼兒園名稱或代碼")
     parser.add_argument("--school-year", help="只處理指定學年度，例如 113")
     return parser.parse_args()
@@ -844,8 +854,11 @@ def write_statement_csv(
     output: Path,
     pdf_path: Path,
     rows: list[dict[str, Any]],
+    page: int = 6,
+    school_year: int | None = None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
+    year = school_year if school_year is not None else report_school_year(pdf_path)
     columns = ["檔案名稱", "頁碼", "報告學年度", "科目", "金額", "原始年度標示"]
     with output.open("w", newline="", encoding="utf-8-sig") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=columns)
@@ -854,8 +867,8 @@ def write_statement_csv(
             writer.writerow(
                 {
                     "檔案名稱": pdf_path.name,
-                    "頁碼": 6,
-                    "報告學年度": f"{report_school_year(pdf_path)}學年度",
+                    "頁碼": page,
+                    "報告學年度": f"{year}學年度",
                     "科目": row.get("科目"),
                     "金額": row.get("金額"),
                     "原始年度標示": row.get("年度"),
@@ -1274,6 +1287,30 @@ def extract_income_only(
     write_statement_validation_csv(validation_output, pdf_path, rows)
 
 
+def extract_income_prev_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+    validation_output: Path,
+) -> None:
+    """抽取前一年度收支餘絀表（預設第 7 頁），學年度標為本檔學年度減 1。
+
+    用途：110 學年度 PDF 的第 7 頁即為 109 學年度收支餘絀，用以補齊 109 年資料。
+    """
+    images = _convert_pages(pdf_path, dpi, poppler_path, pages)
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取前一年度收支餘絀表")
+    prev_year = report_school_year(pdf_path) - 1
+    page = min(pages)
+    print(f"  抽取前一年度收支餘絀表（第 {page} 頁，標記為 {prev_year} 學年度）")
+    rows = request_income_statement(provider, images[0])
+    write_statement_csv(output, pdf_path, rows, page=page, school_year=prev_year)
+    write_statement_validation_csv(validation_output, pdf_path, rows)
+
+
 def extract_pdf(
     pdf_path: Path,
     provider: str,
@@ -1410,6 +1447,7 @@ def main() -> int:
     appendix4_pages = [int(p) for p in str(args.appendix4_pages).split(",") if p.strip()]
     balance_sheet_pages = [int(p) for p in str(args.balance_sheet_pages).split(",") if p.strip()]
     income_pages = [int(p) for p in str(args.income_pages).split(",") if p.strip()]
+    income_prev_pages = [int(p) for p in str(args.income_prev_pages).split(",") if p.strip()]
     pdf_files = sorted(args.input_dir.rglob("*.pdf"))
     if args.kindergarten:
         query = args.kindergarten.casefold()
@@ -1470,8 +1508,28 @@ def main() -> int:
         appendix4_output = table_output_path(
             table_output_base, pdf_path, f"{prefix}_附表四_財產清冊"
         )
+        # 前一年度收支餘絀（第 7 頁）輸出至「前一學年度」資料夾
+        prev_year = school_year - 1
+        prev_school_dir = school_output_dir(table_output_base, pdf_path).parent.parent / f"{prev_year}學年度" / school_output_dir(table_output_base, pdf_path).name
+        income_prev_output = prev_school_dir / f"{prefix}_{prev_year}學年度收支餘絀表.csv"
+        income_prev_validation_output = (
+            school_output_dir(validation_output_base, pdf_path).parent.parent
+            / f"{prev_year}學年度"
+            / school_output_dir(validation_output_base, pdf_path).name
+            / f"{prefix}_{prev_year}學年度收支餘絀表驗證.csv"
+        )
         try:
-            if args.balance_sheet_only:
+            if args.income_prev_only:
+                extract_income_prev_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    income_prev_pages,
+                    income_prev_output,
+                    income_prev_validation_output,
+                )
+            elif args.balance_sheet_only:
                 extract_balance_sheet_only(
                     pdf_path,
                     args.provider,
@@ -1577,6 +1635,7 @@ def main() -> int:
             or args.appendix4_only
             or args.balance_sheet_only
             or args.income_only
+            or args.income_prev_only
         )
         if not args.ocr and not args.index_only and not table_only_mode:
             report_output = school_output_dir(data_root / "processed", pdf_path) / f"{prefix}_財報摘要.csv"
@@ -1591,6 +1650,7 @@ def main() -> int:
         or args.appendix4_only
         or args.balance_sheet_only
         or args.income_only
+        or args.income_prev_only
     ):
         print(f"完成指定表格抽取，共 {len(rows)} 份 PDF")
     elif args.notes_only:
