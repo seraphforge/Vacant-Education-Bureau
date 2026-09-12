@@ -50,6 +50,7 @@ RDS MySQL「my-mysql-db」     ← 資料庫，schema = readme，table = kinderg
 | `src/app.py` | Lambda 主程式（路由 + SQL 查詢） |
 | `src/requirements.txt` | Lambda 依賴（只有 PyMySQL，純 Python 不需編譯） |
 | `build_zip.py` | 把 `build/` 打包成 `lambda.zip` |
+| `local_test.py` | 本機測試 handler（開 SSH tunnel 連 RDS，不用部署） |
 | `deploy.ps1` | 一鍵部署**後端** |
 | `deploy-web.ps1` | 一鍵部署**前端**（build + 上傳 + 清快取） |
 | `deploy.config.ps1` | 你的設定與**資料庫密碼**（已 gitignore，不會進版控） |
@@ -189,7 +190,20 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 - 每所幼兒園**每個學年度都有一列**（104～114 共 11 個學年度、74,628 列）。
   所以查詢一定要帶學年度，否則同一間學校會出現 11 次。預設用最新學年度。
 
-## 測試
+## 本機測試（不用部署）
+
+改完 `src/app.py` 後，可以先在本機驗證再部署：
+
+```powershell
+cd aws
+python local_test.py
+```
+
+它會自己開 SSH tunnel（透過 bastion EC2）連到私有的 RDS，把 `app.handler`
+當普通 Python function 呼叫，跑過所有端點並印出結果，還會 `EXPLAIN` 確認索引有生效。
+帳密從 `deploy.config.ps1` 讀，腳本本身不含密碼。
+
+## 測試（已部署的 API）
 
 ```powershell
 $base = "https://e86tz73y7h.execute-api.us-east-1.amazonaws.com"
