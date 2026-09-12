@@ -31,6 +31,10 @@
 
 ## 貢獻者
 
-<img src = "https://contrib.rocks/image?repo = seraphforge/Vacant-Education-Bureau"/>
+<a href="https://github.com/seraphforge/Vacant-Education-Bureau/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=seraphforge/Vacant-Education-Bureau" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
 
 ## 授權條款
