@@ -75,12 +75,6 @@ def respond(status, body):
     }
 
 
-def clean_county_expr(alias=""):
-    """county 存成 "[01]新北市"，取 ']' 之後的部分當顯示名稱。"""
-    col = f"{alias}county" if alias else "county"
-    return f"TRIM(SUBSTRING_INDEX({col}, ']', -1))"
-
-
 def to_int(value, default, lo, hi):
     try:
         n = int(value)
@@ -101,10 +95,12 @@ def handle_health(cur):
 
 
 def handle_counties(cur):
-    expr = clean_county_expr()
+    # county 已在資料庫端清乾淨（不再有 "[01]" 前綴），
+    # 所以直接 GROUP BY 欄位本身，可以吃到 idx_county 索引。
     cur.execute(
-        f"SELECT {expr} AS county, COUNT(*) AS count "
-        f"FROM kindergarten GROUP BY {expr} ORDER BY count DESC"
+        "SELECT county, COUNT(*) AS count FROM kindergarten "
+        "WHERE county IS NOT NULL AND county <> '' "
+        "GROUP BY county ORDER BY count DESC"
     )
     return respond(200, {"items": cur.fetchall()})
 
@@ -138,7 +134,8 @@ def handle_kindergartens(cur, qs):
         where.append("academic_year = %s")
         params.append(year)
     if county:
-        where.append(f"{clean_county_expr()} = %s")
+        # 直接比對欄位（不套函式），才用得到 idx_county 索引
+        where.append("county = %s")
         params.append(county)
     if name:
         where.append("school_name LIKE %s")
@@ -155,7 +152,7 @@ def handle_kindergartens(cur, qs):
     offset = (page - 1) * page_size
     cur.execute(
         f"""SELECT id, academic_year, code, school_name, ownership,
-                   {clean_county_expr()} AS county, district, address, phone
+                   county, district, address, phone
             FROM kindergarten
             {where_sql}
             ORDER BY {sort_by} {sort_dir}, id ASC
