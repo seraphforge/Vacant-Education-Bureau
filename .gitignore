@@ -290,3 +290,6 @@ $RECYCLE.BIN/
 
 bastion-key.pem
 bastion-key.ppk
+
+# 財報原始 PDF（不納入版控，屬原始資料來源）
+data/finance_pdf_cleaning/raw/**/*.pdf
