@@ -1,0 +1,111 @@
+.report {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-ground);
+}
+
+.report__main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 2rem 1rem 3rem;
+}
+
+.report__card {
+  width: 100%;
+  max-width: 640px;
+  background: var(--surface-card);
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.report__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.report__lead {
+  margin: 0 0 1.75rem;
+  color: var(--text-color-secondary);
+  line-height: 1.6;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+
+  label {
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  input,
+  textarea {
+    width: 100%;
+  }
+}
+
+.req {
+  color: var(--red-500);
+}
+
+.hint {
+  color: var(--text-color-secondary);
+  font-size: 0.8rem;
+}
+
+.err-text {
+  color: var(--red-500);
+  font-size: 0.8rem;
+}
+
+.kg-item {
+  display: flex;
+  flex-direction: column;
+
+  &__meta {
+    color: var(--text-color-secondary);
+  }
+}
+
+.file-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--surface-ground);
+    border-radius: 8px;
+  }
+
+  &__name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__size {
+    color: var(--text-color-secondary);
+    font-size: 0.8rem;
+  }
+}
+
+.report__actions {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: flex-end;
+}

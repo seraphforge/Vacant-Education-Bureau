@@ -1,0 +1,56 @@
+.dash {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-ground);
+}
+
+.dash__main {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+.dash__bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.dash__title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.dash__scope {
+  color: var(--text-color-secondary);
+  font-size: 0.9rem;
+
+  i {
+    margin-right: 0.25rem;
+  }
+}
+
+.dash__user {
+  color: var(--text-color-secondary);
+}
+
+.dash__empty {
+  text-align: center;
+  color: var(--text-color-secondary);
+  padding: 2rem 0;
+}
+
+/* 整列文字顏色（UI_SPEC §6.2.1）。用 ::ng-deep 讓顏色套進 p-table 的 td。 */
+:host ::ng-deep tr.row--risk-high > td {
+  color: #7c3aed; /* 紫色：風險指數 ≥ 80（high） */
+  font-weight: 600;
+}
+
+:host ::ng-deep tr.row--risk-medium > td {
+  color: #dc2626; /* 紅色：風險指數 60–79（medium） */
+  font-weight: 600;
+}

@@ -9,6 +9,12 @@ export interface Kindergarten {
   district: string;
   address: string;
   phone: string;
+  /**
+   * 以下兩欄僅由 /api/secure/kindergartens 回傳（API_SPEC §4.2），
+   * 公開端點不會有。尚未計算時為 null。
+   */
+  risk_score?: number | null;
+  risk_level?: 'high' | 'medium' | 'normal' | null;
 }
 
 /** GET /api/kindergartens 的查詢條件 */

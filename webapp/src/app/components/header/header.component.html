@@ -1,0 +1,18 @@
+<header class="app-header">
+  <div class="app-header__brand">
+    <img class="app-header__logo" src="img/icon.png" alt="平臺 Logo" />
+    <span class="app-header__title">教育機構風險評估整合平臺</span>
+  </div>
+
+  @if (loggedIn()) {
+    <button
+      type="button"
+      pButton
+      class="p-button-text app-header__logout"
+      icon="pi pi-sign-out"
+      label="登出"
+      aria-label="登出"
+      (click)="onLogout()"
+    ></button>
+  }
+</header>

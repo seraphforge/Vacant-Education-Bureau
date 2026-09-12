@@ -1,24 +1,15 @@
-import { Component, inject } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
+import { Component } from '@angular/core';
+import { RouterOutlet } from '@angular/router';
 
-import { AuthService } from './services/auth.service';
-
+/**
+ * 應用外殼：只放 router-outlet。
+ * 各頁面自行套用共用的 HeaderComponent（UI_SPEC §2），
+ * 因此這裡不再放全域導覽列。
+ */
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, ButtonModule],
-  templateUrl: './app.component.html',
-  styleUrl: './app.component.scss',
+  imports: [RouterOutlet],
+  template: '<router-outlet></router-outlet>',
 })
-export class AppComponent {
-  private auth = inject(AuthService);
-  private router = inject(Router);
-
-  readonly user = this.auth.user;
-
-  onLogout(): void {
-    this.auth.logout();
-    void this.router.navigate(['/kindergartens']);
-  }
-}
+export class AppComponent {}
