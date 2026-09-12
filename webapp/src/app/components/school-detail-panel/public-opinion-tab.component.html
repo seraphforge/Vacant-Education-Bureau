@@ -1,0 +1,140 @@
+@if (loading()) {
+  <div class="opinion__loading">
+    <p-progressSpinner styleClass="w-3rem h-3rem" strokeWidth="4"></p-progressSpinner>
+  </div>
+} @else {
+  <div class="opinion">
+    <!-- 啟動列：按鈕 + 上次分析時間 + 關注指數 -->
+    <div class="opinion__actions">
+      <p-button
+        [label]="running() ? '分析進行中…' : data()?.hasData ? '重新分析輿情' : '啟動輿情分析'"
+        icon="pi pi-sparkles"
+        [loading]="starting() || running()"
+        [disabled]="starting() || running()"
+        (onClick)="startScan()"
+      ></p-button>
+
+      @if (data()?.hasData) {
+        <span class="opinion__meta">上次分析：{{ data()?.resultAt }}</span>
+        <p-tag
+          [value]="'關注指數 ' + (data()?.opinionScore ?? 0) + ' / 100'"
+          [severity]="scoreSeverity()"
+        ></p-tag>
+      }
+    </div>
+
+    <!-- 進度 -->
+    @if (running()) {
+      <p-message
+        severity="info"
+        [text]="progressText()"
+        styleClass="opinion__wide"
+      ></p-message>
+    }
+
+    @if (errorMessage(); as message) {
+      <p-message severity="warn" [text]="message" styleClass="opinion__wide"></p-message>
+    }
+
+    <!-- AI 摘要 -->
+    @if (data()?.summary; as summary) {
+      <section class="opinion__summary">
+        <h4><i class="pi pi-sparkles"></i> AI 摘要</h4>
+        <p class="opinion__summary-body">{{ summary }}</p>
+        @if (job()?.modelId; as model) {
+          <p class="opinion__model">模型：{{ model }}</p>
+        }
+      </section>
+    }
+
+    <!-- 免責標示：文案由後端提供，不要在前端改寫 -->
+    @if (data()?.disclaimer; as disclaimer) {
+      <p-message severity="warn" [text]="disclaimer" styleClass="opinion__wide"></p-message>
+    }
+
+    @if (!data()?.hasData && !running()) {
+      <div class="tab-empty">
+        <i class="pi pi-comments"></i>
+        <h3>尚未進行輿情分析</h3>
+        <p>
+          按上方按鈕啟動 AI Agent，系統會蒐集政府公開資料、新聞與網路公開討論，
+          比對是否指向本園，並整理成需要人工複核的清單。
+        </p>
+      </div>
+    }
+
+    <!-- 可歸屬本園 -->
+    @if (confirmedItems().length) {
+      <section class="opinion__group">
+        <h4>可歸屬本園（{{ confirmedItems().length }} 筆）</h4>
+        <ng-container
+          [ngTemplateOutlet]="itemTable"
+          [ngTemplateOutletContext]="{ rows: confirmedItems() }"
+        ></ng-container>
+      </section>
+    }
+
+    <!-- 待人工確認 -->
+    @if (ambiguousItems().length) {
+      <section class="opinion__group">
+        <h4>待人工確認（{{ ambiguousItems().length }} 筆）</h4>
+        <p class="opinion__note">同名、附設或分班可能造成誤判，需人工判斷是否為本園。</p>
+        <ng-container
+          [ngTemplateOutlet]="itemTable"
+          [ngTemplateOutletContext]="{ rows: ambiguousItems() }"
+        ></ng-container>
+      </section>
+    }
+
+    @if (data()?.hasData && !confirmedItems().length && !ambiguousItems().length) {
+      <p-message
+        severity="success"
+        text="本次未查到可歸屬本園的負面公開資訊。未取得結果不代表沒有相關討論。"
+        styleClass="opinion__wide"
+      ></p-message>
+    }
+  </div>
+}
+
+<!-- 表格樣板：文字內容 / 來源 / 日期（UI_SPEC §6.3 Tab 3 的欄位），另加情緒與風險標籤 -->
+<ng-template #itemTable let-rows="rows">
+  <p-table [value]="rows" styleClass="p-datatable-sm" [tableStyle]="{ 'min-width': '100%' }">
+    <ng-template pTemplate="header">
+      <tr>
+        <th scope="col">內容</th>
+        <th scope="col" class="opinion__col-source">來源</th>
+        <th scope="col" class="opinion__col-date">日期</th>
+      </tr>
+    </ng-template>
+    <ng-template pTemplate="body" let-item>
+      <tr>
+        <td>
+          <div class="opinion__title">
+            @if (isExternal(item)) {
+              <a [href]="item.url" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+            } @else {
+              <span>{{ item.title }}</span>
+            }
+          </div>
+          @if (item.snippet) {
+            <div class="opinion__snippet">{{ item.snippet }}</div>
+          }
+          <div class="opinion__tags">
+            <p-tag [value]="sentimentLabel(item)" [severity]="sentimentSeverity(item)"></p-tag>
+            @for (tag of item.riskTags; track tag) {
+              <p-tag [value]="tag" severity="warning" [rounded]="true"></p-tag>
+            }
+            @if (item.verified) {
+              <p-tag value="來源可核對" severity="info" [rounded]="true"></p-tag>
+            }
+          </div>
+        </td>
+        <td>
+          <div>{{ item.source || '—' }}</div>
+          <small class="opinion__muted">{{ sourceTypeLabel(item) }}</small>
+        </td>
+        <td>{{ item.publishedAt || '未載明' }}</td>
+      </tr>
+    </ng-template>
+  </p-table>
+</ng-template>

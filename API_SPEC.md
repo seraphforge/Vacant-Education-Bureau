@@ -519,9 +519,111 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
 
 雷達圖直接用 `dimensions` 的 `label` 當軸、`score`（0–100）當值。`score` 為 `null` 時建議畫 0 並加註「尚無資料」。
 
-### 4.9 尚未提供
+### 4.9 輿情分析（政府端一鍵啟動，非同步）
 
-**財報 Tab（UI_SPEC 6.3 Tab 2）與輿情分析 Tab（Tab 3）的 API 還沒定案**，欄位仍在討論中。這兩個 Tab 請先做出殼（Tab 標題 + 空狀態提示「資料整合中」），不要先自訂欄位，避免之後對不上。
+分析要跑數十秒到數分鐘，超過 API Gateway 的 29 秒上限，所以是 **job 模式**：
+`POST` 建立工作 → API Lambda 非同步 invoke worker Lambda → 前端輪詢進度。
+
+實作：`aws/src/opinion.py`（API）、`aws/src/opinion_worker.py`（分析）、`db/migrations/004_opinion.sql`。
+
+#### 4.9.1 `GET /api/secure/kindergartens/{id}/opinion`
+
+開 Tab 時呼叫，回最後一次**成功完成**的結果。從沒掃過回 `hasData: false`。
+
+```jsonc
+{
+  "kindergartenId": 1234,
+  "schoolName": "新北市私立快樂幼兒園",
+  // 免責說明由後端統一提供，前端直接顯示，不要自己改寫
+  "disclaimer": "本頁資料由 AI 自動蒐集公開網路資訊產生，僅代表「需要人工關注的程度」…",
+  "cooldownMinutes": 10,
+  "hasData": true,
+  "job": { /* 最近一次的 job，可能還在跑或失敗，見 4.9.3 */ },
+  "resultJobId": 7,
+  "resultAt": "2026-09-13T01:40:00Z",
+  "summary": "多行純文字摘要（AI 產生 + 程式補上來源狀態）",
+  "opinionScore": 23.5,          // 0–100，可能為 0；null 代表還沒算過
+  "items": [ /* 見 4.9.4 */ ]
+}
+```
+
+#### 4.9.2 `POST /api/secure/kindergartens/{id}/opinion/scans`
+
+沒有 request body。回應：
+
+| 狀態碼 | 情況 |
+|---|---|
+| `202` | 已建立 job 並成功喚醒 worker |
+| `200` | 已經有 job 在跑，回那個 job 並帶 `reused: true`（不重複發動） |
+| `429` | 冷卻期內（`code: SCAN_COOLDOWN`，`detail.retryAfterSeconds`、`detail.lastJobId`） |
+| `404` | 幼兒園不存在，**或不在這個帳號的縣市權限內**（故意不區分，避免洩漏存在性） |
+| `500` | 無法喚醒 worker；job 會被標成 `failed` 並附 `error` |
+
+#### 4.9.3 `GET /api/secure/kindergartens/{id}/opinion/scans/{jobId}`
+
+輪詢用（前端每 4 秒一次）。`status` 為 `done` 時 `items` 會一起回來。
+
+```jsonc
+{
+  "jobId": 7,
+  "kindergartenId": 1234,
+  "status": "analyzing",        // queued | searching | analyzing | done | failed
+  "statusLabel": "AI 正在整理與判讀",   // 文字由後端定案，前端不要自己翻譯
+  "requestedAt": "2026-09-13T01:38:00Z",
+  "startedAt": "2026-09-13T01:38:01Z",
+  "finishedAt": null,
+  "requestedBy": "staff01",
+  "queryCount": 12,             // 各來源實際取得的原始筆數合計
+  "itemCount": 8,
+  "confirmedCount": 2,          // attribution = confirmed
+  "negativeCount": 1,           // confirmed 且負面分數 >= 0.5
+  "opinionScore": null,
+  "summary": null,
+  "searchProvider": "http",     // http | http(blocked)
+  "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "error": null,
+  "disclaimer": "…"
+}
+```
+
+#### 4.9.4 `items[]`
+
+UI_SPEC Tab 3 要求的欄位是「文字內容 / 來源 / 日期」，這裡另外提供情緒與風險標籤。
+
+```jsonc
+{
+  "id": 91,
+  "title": "行政裁罰（新北教前字第…號）：違反幼兒教育及照顧法第 …",
+  // internal:// 開頭的是本府內部資料（裁罰紀錄／家長回報），前端不要當連結
+  "url": "https://…",
+  "source": "教保服務機構裁罰紀錄",
+  "sourceType": "gov",          // news | social | gov | web | report
+  "publishedAt": "2026-05-20",  // 來源沒寫就是 null，不要猜
+  "snippet": "只保留摘要片段，不存全文",
+  "sentiment": "NEGATIVE",      // Comprehend DetectSentiment（zh-TW）；可能為 null
+  "negativeScore": 0.9891,
+  "riskTags": ["行政裁罰"],
+  // 同名園所很常見，所以 ambiguous 是常態而非例外
+  "attribution": "confirmed",   // confirmed | ambiguous | unrelated
+  "attributionLabel": "已比對到本園全名",
+  "confidence": 1.0,
+  // 只代表「來源可核對」（官方公開資料或本府自有紀錄），不代表指控成立
+  "verified": true
+}
+```
+
+**資料語意（UI 必須照樣呈現，不可省略）**
+
+- 每一筆都是「需要人工關注的線索」，不是已證實的事實，不得單獨作為裁處依據。
+- `confirmed` 與 `ambiguous` 必須分開顯示，不要混在同一張表。
+- 只有 `attribution = confirmed` 的項目會計入 `opinionScore`；沒有任何可歸屬線索時分數是 `0`（查過而且沒查到，本身是有意義的資訊），不是 `null`。
+- **`opinionScore` 按「問題類型」計，不按「報導篇數」計。** 每種風險標籤只計一次（取權重最高的那一筆），所以同一個事件被 10 家媒體報導不會讓分數變成 10 倍。`itemCount` 會如實反映筆數，兩者不要互推。
+- 官方可核對的紀錄（`verified: true`）用完整權重，不受情緒分數折扣——裁罰處分書是公文腔，`sentiment` 常常是 `NEUTRAL`，但「被罰了」跟語氣無關。
+- 完成後 worker 會把分數寫回 `risk_score_current` 的 `opinion` 維度（§4.8 的雷達圖會跟著亮），但**不會**去算 `totalScore`——其他維度還是 placeholder，算總分會給人「已完成評估」的錯覺。
+
+### 4.10 尚未提供
+
+**財報 Tab（UI_SPEC 6.3 Tab 2）的 API 還沒定案**，欄位仍在討論中。這個 Tab 請先做出殼（Tab 標題 + 空狀態提示「資料整合中」），不要先自訂欄位，避免之後對不上。
 
 ---
 

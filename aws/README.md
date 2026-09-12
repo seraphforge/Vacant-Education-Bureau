@@ -42,8 +42,59 @@ schema = readme                   S3（家長回報附件，presigned URL 直傳
 > 家長回報需要寄信，所以 `template.yaml` 另外加了一個
 > **SES 的 Interface VPC Endpoint**（`com.amazonaws.us-east-1.email`），
 > 讓 Lambda 走內網呼叫 SES，不必為此開 NAT Gateway（約 $7/月 vs $32/月起）。
-> 之後如果還需要呼叫別的 AWS 服務（例如 Bedrock），照同一個模式再加一個 endpoint 即可；
 > 附件用的 S3 不需要，因為 presigned URL 只是本機簽章運算。
+
+### 輿情分析 worker 為什麼需要 NAT Gateway
+
+輿情分析要去讀**別人的網站**（政府公布欄 OpenAPI、新聞 RSS、公開搜尋結果），
+這不是呼叫 AWS 服務，沒有 VPC Endpoint 可以用，只能有真正的對外網路。
+
+作法是**只加不改**，完全不動現在會跑的 API：
+
+```
+現有 6 個子網（RDS + API Lambda）    新增的兩個子網（只有 worker 在裡面）
+0.0.0.0/0 -> Internet Gateway        0.0.0.0/0 -> NAT Gateway
+（Lambda 沒有 public IP，等於沒網路）      （真的出得去）
+        │                                     │
+        └──────────── 同一個 VPC，local 路由互通 ─┘
+                              │
+                         RDS MySQL
+```
+
+- 新增 `172.31.96.0/20`、`172.31.112.0/20` 兩個私有子網（部署當下 VPC 內未使用），
+  各自在不同 AZ，共用一張新的 route table 指向 NAT Gateway。
+- **沒有修改 main route table**，也沒有改任何現有子網 —— RDS 與 API Lambda 的網路
+  跟今天一模一樣。
+- NAT Gateway 放在現有子網（已經有 IGW 路由），`deploy.ps1` 自動帶第一個 RDS 子網進去。
+- API Lambda 要非同步喚醒 worker，但它沒有對外網路，所以另外加了
+  **Lambda 的 Interface VPC Endpoint**（作法與上面的 SES endpoint 相同）。
+
+固定成本大約：NAT Gateway $32/月起 + Lambda endpoint $7/月 + 流量。
+比賽期間是幾美金；**Demo 結束後 `aws cloudformation delete-stack` 會一起收掉**。
+
+輿情 worker 的網路設定另外有兩點值得知道：
+
+- `ReservedConcurrentExecutions: 3`：同時最多 3 個掃描。對面是別人的網站，
+  這個上限是禮貌也是保護。
+- 堆疊 Output 有 `OpinionEgressIp`（NAT 的固定 IP）。如果某個來源開始回 `blocked`，
+  它封的就是這個位址。
+
+### 輿情 worker 的可調參數
+
+都是 CloudFormation 參數，不用改程式：
+
+| 參數 | 預設 | 說明 |
+|---|---|---|
+| `OpinionModelId` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Bedrock 模型。Anthropic 系列**必須**帶 `us.` inference profile 前綴，裸 model id 會被拒 |
+| `OpinionSearchEndpoint` | `https://lite.duckduckgo.com/lite/` | 公開搜尋端點。會遵守 robots，被 anti-bot 擋就記 `blocked` |
+| `OpinionGoogleNews` | `1` | 是否查 Google News RSS（唯一能用園名精準搜到新聞的來源）。設 `0` 關閉 |
+| `OpinionRobotsExemptHosts` | `news.google.com` | **明列**跳過 robots 檢查的 host。清空即完全移除例外；其他來源不受影響 |
+| `WorkerSubnetACidr` / `WorkerSubnetBCidr` | `172.31.96.0/20` / `172.31.112.0/20` | worker 專用子網，必須是 VPC 內未使用的區段 |
+
+`OpinionRobotsExemptHosts` 是一個**刻意的取捨**：`news.google.com` 的 robots.txt
+對 `*` 是 `Disallow: /`，我們為了驗證概念小量使用它（每次掃描 2 個查詢 × 8 筆，
+只讀標題與連結不抓原文）。專案根目錄的 README 有完整說明。正式上線前建議改接
+有授權的新聞 API。
 
 ## 檔案
 
@@ -60,10 +111,13 @@ schema = readme                   S3（家長回報附件，presigned URL 直傳
 | `src/mailer.py` | 寄信（SES v2，含不寄信的 dev mode） |
 | `src/storage.py` | 附件的 S3 presigned URL |
 | `src/risk.py` | 風險指數（目前是 placeholder） |
+| `src/opinion.py` | 輿情分析 job API（啟動掃描／查進度／查最新結果） |
+| `src/opinion_worker.py` | 輿情分析 worker（多來源蒐集 + Bedrock 判讀 + Comprehend 情緒） |
 | `src/requirements.txt` | Lambda 依賴（只有 PyMySQL；boto3 是 runtime 內建） |
 | `build_zip.py` | 把 `build/` 打包成 `lambda.zip` |
 | `local_test.py` | 本機測試幼兒園／裁罰端點（開 SSH tunnel 連 RDS，不用部署） |
 | `local_test_reports.py` | 本機測試家長回報全流程（63 項檢查） |
+| `local_test_opinion.py` | 本機測試輿情 worker（`--live` 會連真的來源與 Bedrock／Comprehend） |
 | `deploy.ps1` | 一鍵部署**後端** |
 | `deploy-web.ps1` | 一鍵部署**前端**（build + 上傳 + 清快取） |
 | `deploy-auth.ps1` | 一鍵部署**登入**（Cognito User Pool） |
@@ -78,6 +132,7 @@ schema = readme                   S3（家長回報附件，presigned URL 直傳
 | `API_SPEC.md` | **前後端的 API 契約**（請求／回應格式、錯誤碼、TS 型別） |
 | `db/migrations/*.sql` | 資料表 DDL，照檔名順序套用 |
 | `tools/migrate.py` | 跑 migration（同樣走 bastion SSH tunnel） |
+| `tools/opinion_e2e.py` | 輿情分析端到端測試（真 worker + 真 RDS + 真 Bedrock，不用部署） |
 | `tools/seed_risk_placeholder.py` | 灌風險指數的假分數，給前端開發用 |
 | `tools/cleanup_test_reports.py` | 刪掉測試用的家長回報資料 |
 

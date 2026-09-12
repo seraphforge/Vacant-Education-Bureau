@@ -5,6 +5,8 @@ import { Observable, delay, of } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   CreateMessageRequest,
+  OpinionLatest,
+  OpinionScanJob,
   PatchReportRequest,
   ReportDetail,
   ReportListResponse,
@@ -85,6 +87,30 @@ export class SecureReportService {
       return of(this.mockRisk(kindergartenId)).pipe(delay(300));
     }
     return this.http.get<RiskAssessment>(`${this.base}/kindergartens/${kindergartenId}/risk`);
+  }
+
+  // ---------- 輿情分析（真實 API；分析在 worker Lambda，前端輪詢） ----------
+  /** 開 Tab 時取最新一次結果。從沒掃過會回 hasData=false。 */
+  getOpinion(kindergartenId: number): Observable<OpinionLatest> {
+    return this.http.get<OpinionLatest>(`${this.base}/kindergartens/${kindergartenId}/opinion`);
+  }
+
+  /**
+   * 啟動一次掃描。回 202 + jobId；已經有 job 在跑會回 200 並帶 reused=true。
+   * 冷卻期內會回 429（code=SCAN_COOLDOWN，detail.retryAfterSeconds）。
+   */
+  startOpinionScan(kindergartenId: number): Observable<OpinionScanJob> {
+    return this.http.post<OpinionScanJob>(
+      `${this.base}/kindergartens/${kindergartenId}/opinion/scans`,
+      {},
+    );
+  }
+
+  /** 輪詢進度。status=done 時 items 會一起回來。 */
+  getOpinionScan(kindergartenId: number, jobId: number): Observable<OpinionScanJob> {
+    return this.http.get<OpinionScanJob>(
+      `${this.base}/kindergartens/${kindergartenId}/opinion/scans/${jobId}`,
+    );
   }
 
   /**

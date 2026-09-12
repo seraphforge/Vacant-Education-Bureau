@@ -157,6 +157,9 @@ $paramOverrides = @(
     "CodeS3Key=$Key",
     "VpcId=$VpcId",
     "SubnetIds=$($SubnetIds -join ',')",
+    # 輿情 worker 的 NAT Gateway 要放在「已經有 IGW 路由」的子網。
+    # RDS 的子網都是預設 VPC 的公有子網，取第一個即可。
+    "NatPublicSubnetId=$($SubnetIds[0])",
     "RdsSecurityGroupId=$RdsSgId",
     "DbHost=$DbHost",
     "DbPort=$DbPort",

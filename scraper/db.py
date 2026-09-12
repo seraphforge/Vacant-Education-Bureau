@@ -19,9 +19,12 @@ BASTION = "ec2-user@54.234.197.134"
 RDS = "my-mysql-db.cxxv46x5y2qp.us-east-1.rds.amazonaws.com"
 LOCAL_PORT = 13399
 
-DB_USER = "admin"
-DB_PASSWORD = "***REMOVED-SEE-ENV-VAR***"
-DB_NAME = "readme"
+DB_USER = os.environ.get("DB_USER", "admin")
+# 密碼不寫在程式裡。設環境變數 DB_PASSWORD，或讓呼叫端從
+# aws/deploy.config.ps1（已 gitignore）讀出來後再設進環境。
+#   PowerShell: $env:DB_PASSWORD = "..."
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_NAME = os.environ.get("DB_NAME", "readme")
 
 _tunnel = None
 
@@ -56,6 +59,11 @@ def open_tunnel():
 
 
 def connect():
+    if not DB_PASSWORD:
+        sys.exit(
+            "缺少 DB_PASSWORD 環境變數。\n"
+            "PowerShell：$env:DB_PASSWORD = (從 aws/deploy.config.ps1 取得)"
+        )
     open_tunnel()
     return pymysql.connect(
         host="127.0.0.1", port=LOCAL_PORT,

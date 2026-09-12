@@ -223,3 +223,75 @@ export interface RiskAssessment {
   computedAt: string | null;
   dimensions: RiskDimension[];
 }
+
+// ---------- 輿情分析 ----------
+/** 掃描工作的狀態。後端提供 statusLabel，前端不要自己翻譯。 */
+export type OpinionScanStatus = 'queued' | 'searching' | 'analyzing' | 'done' | 'failed';
+
+/**
+ * 這筆資料能不能歸屬到這一間幼兒園。
+ * 同名園所很常見，所以 ambiguous 是常態而非例外，UI 必須把它跟 confirmed 分開顯示。
+ */
+export type OpinionAttribution = 'confirmed' | 'ambiguous' | 'unrelated';
+
+export interface OpinionItem {
+  id: number;
+  title: string;
+  /** internal:// 開頭的是本府內部資料（裁罰紀錄／家長回報），不是可點的外部連結 */
+  url: string;
+  source: string | null;
+  sourceType: 'news' | 'social' | 'gov' | 'web' | 'report' | string;
+  publishedAt: string | null;
+  snippet: string | null;
+  sentiment: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' | 'MIXED' | null;
+  negativeScore: number | null;
+  riskTags: string[];
+  attribution: OpinionAttribution;
+  attributionLabel: string;
+  confidence: number | null;
+  /** 只代表來源可核對（官方公開資料），不代表指控成立 */
+  verified: boolean;
+}
+
+export interface OpinionScanJob {
+  jobId: number;
+  kindergartenId: number;
+  schoolName?: string;
+  status: OpinionScanStatus;
+  statusLabel: string;
+  requestedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  requestedBy: string | null;
+  queryCount: number;
+  itemCount: number;
+  confirmedCount: number;
+  negativeCount: number;
+  opinionScore: number | null;
+  summary: string | null;
+  searchProvider: string | null;
+  modelId: string | null;
+  error: string | null;
+  /** 已經有一個 job 在跑，後端直接把那個 job 回來 */
+  reused?: boolean;
+  disclaimer?: string;
+  items?: OpinionItem[];
+}
+
+/** GET /api/secure/kindergartens/{id}/opinion */
+export interface OpinionLatest {
+  kindergartenId: number;
+  schoolName: string;
+  /** 免責說明由後端統一提供，前端直接顯示，不要自己編 */
+  disclaimer: string;
+  cooldownMinutes: number;
+  hasData: boolean;
+  /** 最近一次的 job（可能還在跑或失敗） */
+  job: OpinionScanJob | null;
+  /** 最後一次成功完成的結果 */
+  resultJobId?: number;
+  resultAt?: string | null;
+  summary?: string | null;
+  opinionScore?: number | null;
+  items: OpinionItem[];
+}

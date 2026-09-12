@@ -13,6 +13,7 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
   mailer.py        SESv2 寄信（含 dev mode）
   storage.py       S3 presigned URL（附件）
   risk.py          風險指數（目前是 placeholder）
+  opinion.py       輿情分析 job API（實際分析在 opinion_worker.py）
 
 完整的請求／回應格式定義在專案根目錄的 API_SPEC.md。
 
@@ -42,6 +43,9 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
   POST  /api/secure/reports/{id}/messages   回覆家長 / 內部備註
   PATCH /api/secure/reports/{id}            變更狀態 / 指派承辦
   GET   /api/secure/kindergartens/{id}/risk 風險評估（placeholder）
+  POST  /api/secure/kindergartens/{id}/opinion/scans          啟動輿情分析（非同步）
+  GET   /api/secure/kindergartens/{id}/opinion/scans/{jobId}  查掃描進度
+  GET   /api/secure/kindergartens/{id}/opinion                最新一次輿情結果
 
 /api/kindergartens 支援的 query string：
   county        縣市名稱，例如 新北市（可省略 = 全部）
@@ -66,6 +70,7 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
 import re
 
 import auth
+import opinion
 import reports
 import reports_admin
 import risk
@@ -466,6 +471,20 @@ def route_secure(cur, method, path, event, identity):
     m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/risk", path)
     if m and method == "GET":
         return risk.get_risk(cur, int(m.group(1)), identity)
+
+    # ---- 輿情分析（非同步 job）----
+    # 順序有意義：/opinion/scans/{jobId} 要排在 /opinion 之前比對。
+    m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/opinion/scans/(\d+)", path)
+    if m and method == "GET":
+        return opinion.get_job(cur, int(m.group(1)), int(m.group(2)), identity)
+
+    m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/opinion/scans", path)
+    if m and method == "POST":
+        return opinion.start_scan(cur, int(m.group(1)), identity)
+
+    m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/opinion", path)
+    if m and method == "GET":
+        return opinion.get_latest(cur, int(m.group(1)), identity)
 
     return None
 

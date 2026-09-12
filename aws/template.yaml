@@ -32,6 +32,70 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group of the RDS instance. An inbound rule for the Lambda is added to it.
 
+  # --------------------------------------------------------------------------
+  # Public opinion worker networking.
+  #
+  # The worker needs outbound internet (web sources + Bedrock + Comprehend),
+  # which a lambda in the RDS subnets does not have. We add two new private
+  # subnets routed through a NAT gateway instead of changing the existing
+  # subnets, so the already working API keeps its current networking.
+  # --------------------------------------------------------------------------
+  NatPublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      An existing subnet that already routes 0.0.0.0/0 to the internet gateway.
+      The NAT gateway is placed here. deploy.ps1 fills this with the first RDS
+      subnet.
+
+  WorkerSubnetACidr:
+    Type: String
+    Default: 172.31.96.0/20
+    Description: >
+      CIDR for the first worker subnet. Must be free inside the VPC.
+      Verified unused on 2026-09-13 (the VPC only used 172.31.0/16/32/48/64/80.0/20).
+
+  WorkerSubnetBCidr:
+    Type: String
+    Default: 172.31.112.0/20
+    Description: CIDR for the second worker subnet (different AZ). Must be free.
+
+  OpinionModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: >
+      Bedrock model used to summarise and attribute opinion items. Anthropic
+      models need the "us." inference profile prefix; the bare model id is
+      rejected for on-demand throughput.
+
+  OpinionSearchEndpoint:
+    Type: String
+    Default: https://lite.duckduckgo.com/lite/
+    Description: >
+      Public search endpoint for the worker. robots.txt is honoured, so this
+      must be a path the site allows. Anti-bot challenges are recorded as
+      "blocked" and never worked around.
+
+  OpinionGoogleNews:
+    Type: String
+    Default: "1"
+    AllowedValues:
+      - "1"
+      - "0"
+    Description: >
+      Whether to query Google News RSS. It is the only source that finds news
+      for a specific kindergarten by name, but its robots.txt disallows
+      /rss/search for generic agents, so using it is a deliberate exception
+      taken to prove the concept. Set to 0 to turn it off.
+
+  OpinionRobotsExemptHosts:
+    Type: String
+    Default: news.google.com
+    Description: >
+      Comma separated hosts where the robots.txt check is skipped. Everything
+      else still honours robots. Clear this to remove the exception; the rest
+      of the protections (request delay, 401/403/429 and anti-bot detection)
+      apply either way.
+
   DbHost:
     Type: String
   DbPort:
@@ -178,6 +242,161 @@ Resources:
         - !Ref SesEndpointSecurityGroup
 
   # --------------------------------------------------------------------------
+  # Egress for the public opinion worker (NAT gateway).
+  #
+  # The API lambda deliberately stays in the RDS subnets with no internet
+  # route. The opinion worker is different: it has to reach public web
+  # sources, Bedrock and Comprehend, so it needs real outbound internet.
+  #
+  # Nothing here touches the existing subnets or the main route table, so the
+  # working API keeps exactly the networking it has today. Instead we add two
+  # brand new private subnets, give them their own route table pointing at a
+  # NAT gateway, and attach only the worker to them.
+  #
+  # CIDRs default to two /20 blocks that were unused in the VPC. Override the
+  # parameters if that ever stops being true.
+  # --------------------------------------------------------------------------
+  WorkerSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref WorkerSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-worker-a"
+
+  WorkerSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref WorkerSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-worker-b"
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-eip"
+
+  # Sits in one of the existing subnets, which already route 0.0.0.0/0 to the
+  # internet gateway. A NAT gateway needs a public subnet; the worker subnets
+  # above are the private side.
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref NatPublicSubnetId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat"
+
+  WorkerRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-worker-rt"
+
+  WorkerDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref WorkerRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  WorkerSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WorkerSubnetA
+      RouteTableId: !Ref WorkerRouteTable
+
+  WorkerSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WorkerSubnetB
+      RouteTableId: !Ref WorkerRouteTable
+
+  # The worker needs plain HTTP/HTTPS out (web sources, Bedrock, Comprehend)
+  # plus MySQL back to RDS. Kept separate from LambdaSecurityGroup so the
+  # API lambda's egress rules stay as narrow as they are now.
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${ProjectName} opinion worker outbound"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to public sources and AWS APIs
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP for sources that redirect via plain HTTP
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+          Description: MySQL back to RDS
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-worker-sg"
+
+  RdsIngressFromWorker:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref DbPort
+      ToPort: !Ref DbPort
+      SourceSecurityGroupId: !Ref WorkerSecurityGroup
+      Description: !Sub "${ProjectName} opinion worker to RDS MySQL"
+
+  # --------------------------------------------------------------------------
+  # Lambda over PrivateLink.
+  #
+  # The API lambda has to async-invoke the worker, but it has no internet
+  # route, so it cannot reach the Lambda control plane. Same fix as SES
+  # above: an interface endpoint puts a Lambda ENI inside our subnets.
+  # --------------------------------------------------------------------------
+  LambdaEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${ProjectName} lambda endpoint"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+          Description: HTTPS from the API lambda
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-lambda-endpoint-sg"
+
+  LambdaVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.lambda"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref SubnetIds
+      SecurityGroupIds:
+        - !Ref LambdaEndpointSecurityGroup
+
+  # --------------------------------------------------------------------------
   # Attachment bucket for parent reports.
   #
   # Fully private. The browser uploads straight to S3 with a presigned POST
@@ -260,6 +479,33 @@ Resources:
                 Action:
                   - ses:SendEmail
                 Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+        - PolicyName: opinion-analysis
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # The API lambda kicks off the worker asynchronously. Scoped to
+              # this one function so the role cannot invoke anything else.
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-opinion-worker"
+              # Inference only: this role cannot create, tune or delete models.
+              # Both the foundation model and the us.* inference profile need
+              # to be listed, because Anthropic models are called through the
+              # profile and it resolves to the model behind the scenes.
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+              # Sentiment only. Comprehend has no resource-level control for
+              # these real-time calls, so the actions themselves are the limit.
+              - Effect: Allow
+                Action:
+                  - comprehend:DetectSentiment
+                  - comprehend:BatchDetectSentiment
+                Resource: "*"
 
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
@@ -300,6 +546,75 @@ Resources:
           OTP_PEPPER: !Ref OtpPepper
           OTP_TTL_MINUTES: "10"
           ATTACH_BUCKET: !Ref AttachmentBucket
+          # Public opinion scan. Named rather than !Ref'd to avoid a circular
+          # dependency (the worker's IAM role is shared with this function).
+          OPINION_WORKER_FUNCTION: !Sub "${ProjectName}-opinion-worker"
+
+  # --------------------------------------------------------------------------
+  # Public opinion worker.
+  #
+  # Same deployment zip and same role as the API, different handler and very
+  # different networking: this one sits in the NAT subnets so it can reach
+  # public web sources, Bedrock and Comprehend.
+  #
+  # Timeout is generous because the collectors deliberately go slow (at least
+  # one second between requests, and longer when robots.txt asks for it).
+  # ReservedConcurrentExecutions caps how many scans can run at once, which
+  # matters when the thing on the other end is somebody else's website.
+  # --------------------------------------------------------------------------
+  OpinionWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-opinion-worker"
+      RetentionInDays: 7
+
+  OpinionWorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - OpinionWorkerLogGroup
+      - WorkerDefaultRoute
+    Properties:
+      FunctionName: !Sub "${ProjectName}-opinion-worker"
+      Runtime: python3.12
+      Handler: opinion_worker.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 600
+      MemorySize: 1024
+      ReservedConcurrentExecutions: 3
+      Architectures:
+        - x86_64
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref WorkerSecurityGroup
+        SubnetIds:
+          - !Ref WorkerSubnetA
+          - !Ref WorkerSubnetB
+      Environment:
+        Variables:
+          DB_HOST: !Ref DbHost
+          DB_PORT: !Ref DbPort
+          DB_NAME: !Ref DbName
+          DB_USER: !Ref DbUser
+          DB_PASSWORD: !Ref DbPassword
+          OPINION_MODEL_ID: !Ref OpinionModelId
+          OPINION_SEARCH_ENDPOINT: !Ref OpinionSearchEndpoint
+          OPINION_REQUEST_DELAY: "1.2"
+          OPINION_SEARCH_QUERIES: "3"
+          OPINION_MAX_ITEMS: "36"
+          # Google News RSS is the only source that reliably finds news for a
+          # specific kindergarten by name. Its robots.txt disallows /rss/search
+          # for generic agents, so this is a deliberate, scoped exception taken
+          # to prove the concept: kept to a couple of queries per scan, still
+          # rate limited, and still stops on 401/403/429 or an anti-bot page.
+          # Set OPINION_GOOGLE_NEWS to 0 to turn it off, or clear
+          # OPINION_ROBOTS_EXEMPT_HOSTS to remove the exception entirely.
+          OPINION_GOOGLE_NEWS: !Ref OpinionGoogleNews
+          OPINION_GOOGLE_NEWS_QUERIES: "2"
+          OPINION_GOOGLE_NEWS_RESULTS: "8"
+          OPINION_ROBOTS_EXEMPT_HOSTS: !Ref OpinionRobotsExemptHosts
 
   # --------------------------------------------------------------------------
   # API Gateway HTTP API (cheaper and simpler than REST API)
@@ -558,3 +873,11 @@ Outputs:
   MailModeOut:
     Description: dev = OTP returned in the API response, ses = real email
     Value: !Ref MailMode
+  OpinionWorkerFunctionName:
+    Description: Lambda that runs the public opinion scan (check its log group when a scan fails)
+    Value: !Ref OpinionWorkerFunction
+  OpinionEgressIp:
+    Description: >
+      Public IP every opinion scan goes out from. Worth knowing: if a source
+      starts returning "blocked", this is the address it is blocking.
+    Value: !Ref NatEip

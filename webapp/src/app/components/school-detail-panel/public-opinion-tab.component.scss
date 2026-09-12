@@ -1,0 +1,121 @@
+/* 輿情分析 Tab。tab-empty.scss 提供空狀態樣式，這裡只補有資料時的版面。 */
+.opinion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.opinion__loading {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 0;
+}
+
+.opinion__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.opinion__meta {
+  font-size: 0.85rem;
+  color: var(--text-color-secondary);
+}
+
+/* p-message 預設是 inline-block，撐滿寬度比較好讀 */
+:host ::ng-deep .opinion__wide {
+  width: 100%;
+
+  .p-message {
+    width: 100%;
+    margin: 0;
+  }
+
+  .p-message-text {
+    line-height: 1.6;
+  }
+}
+
+.opinion__summary {
+  border: 1px solid var(--surface-border);
+  border-left: 4px solid var(--primary-color);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  background: var(--surface-50);
+
+  h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+}
+
+.opinion__summary-body {
+  margin: 0;
+  line-height: 1.7;
+  /* 後端摘要是多行純文字，保留換行 */
+  white-space: pre-line;
+}
+
+.opinion__model {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-color-secondary);
+}
+
+.opinion__group {
+  h4 {
+    margin: 0 0 0.25rem;
+    font-size: 0.95rem;
+  }
+}
+
+.opinion__note {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-color-secondary);
+}
+
+.opinion__title {
+  font-weight: 600;
+  line-height: 1.5;
+
+  a {
+    color: var(--primary-color);
+    text-decoration: none;
+
+    &:hover,
+    &:focus-visible {
+      text-decoration: underline;
+    }
+  }
+}
+
+.opinion__snippet {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-color-secondary);
+}
+
+.opinion__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.opinion__muted {
+  color: var(--text-color-secondary);
+}
+
+.opinion__col-source {
+  width: 9rem;
+}
+
+.opinion__col-date {
+  width: 7rem;
+}
