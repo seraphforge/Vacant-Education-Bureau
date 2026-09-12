@@ -1,0 +1,132 @@
+<div class="page">
+  <h1 class="title">全國幼兒園查詢</h1>
+  <p class="subtitle">資料來源：教育部幼兒園名冊（moe.kindergarten）</p>
+
+  <p-card styleClass="mb-3">
+    <div class="filters">
+      <div class="field">
+        <label for="year">學年度</label>
+        <p-dropdown
+          inputId="year"
+          [options]="yearOptions"
+          [(ngModel)]="academicYear"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="請選擇"
+          styleClass="w-full"
+        ></p-dropdown>
+      </div>
+
+      <div class="field">
+        <label for="county">縣市</label>
+        <p-dropdown
+          inputId="county"
+          [options]="countyOptions"
+          [(ngModel)]="county"
+          optionLabel="label"
+          optionValue="value"
+          [filter]="true"
+          filterBy="label"
+          placeholder="全部縣市"
+          styleClass="w-full"
+        ></p-dropdown>
+      </div>
+
+      <div class="field">
+        <label for="ownership">公私立</label>
+        <p-dropdown
+          inputId="ownership"
+          [options]="ownershipOptions"
+          [(ngModel)]="ownership"
+          optionLabel="label"
+          optionValue="value"
+          styleClass="w-full"
+        ></p-dropdown>
+      </div>
+
+      <div class="field field-grow">
+        <label for="name">園所名稱關鍵字</label>
+        <input
+          id="name"
+          type="text"
+          pInputText
+          class="w-full"
+          [(ngModel)]="name"
+          (keyup.enter)="onSearch()"
+          placeholder="例如：非營利、附設、橘"
+        />
+      </div>
+
+      <div class="field field-actions">
+        <p-button label="查詢" icon="pi pi-search" (onClick)="onSearch()"></p-button>
+        <p-button
+          label="清除"
+          icon="pi pi-refresh"
+          severity="secondary"
+          [outlined]="true"
+          (onClick)="onReset()"
+        ></p-button>
+      </div>
+    </div>
+  </p-card>
+
+  @if (errorMessage) {
+    <p-message severity="error" [text]="errorMessage" styleClass="mb-3"></p-message>
+  }
+
+  <p-table
+    [value]="rows"
+    [lazy]="true"
+    (onLazyLoad)="onLazyLoad($event)"
+    [paginator]="true"
+    [rows]="pageSize"
+    [first]="first"
+    [totalRecords]="total"
+    [loading]="loading"
+    [rowsPerPageOptions]="[10, 20, 50, 100]"
+    [showCurrentPageReport]="true"
+    currentPageReportTemplate="第 {first} - {last} 筆，共 {totalRecords} 筆"
+    dataKey="id"
+    styleClass="p-datatable-sm p-datatable-striped"
+    responsiveLayout="scroll"
+  >
+    <ng-template pTemplate="header">
+      <tr>
+        <th style="width: 6rem" pSortableColumn="academic_year">
+          學年度 <p-sortIcon field="academic_year"></p-sortIcon>
+        </th>
+        <th style="width: 22rem" pSortableColumn="school_name">
+          園所名稱 <p-sortIcon field="school_name"></p-sortIcon>
+        </th>
+        <th style="width: 6rem">公私立</th>
+        <th style="width: 7rem">縣市</th>
+        <th style="width: 7rem">鄉鎮市區</th>
+        <th>地址</th>
+        <th style="width: 11rem">電話</th>
+      </tr>
+    </ng-template>
+
+    <ng-template pTemplate="body" let-row>
+      <tr>
+        <td>{{ row.academic_year }}</td>
+        <td>{{ row.school_name }}</td>
+        <td>
+          <p-tag
+            [value]="row.ownership"
+            [severity]="row.ownership === '公立' ? 'success' : 'info'"
+          ></p-tag>
+        </td>
+        <td>{{ row.county }}</td>
+        <td>{{ row.district }}</td>
+        <td class="address">{{ row.address }}</td>
+        <td>{{ row.phone }}</td>
+      </tr>
+    </ng-template>
+
+    <ng-template pTemplate="emptymessage">
+      <tr>
+        <td colspan="7" class="text-center p-4">查無資料，請調整查詢條件。</td>
+      </tr>
+    </ng-template>
+  </p-table>
+</div>
