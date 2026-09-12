@@ -30,6 +30,8 @@ export interface KindergartenPage {
   page: number;
   pageSize: number;
   academicYear: string;
+  /** 後端實際套用的縣市範圍；受保護端點會回使用者被鎖定的縣市 */
+  county?: string | null;
 }
 
 export interface CountyOption {

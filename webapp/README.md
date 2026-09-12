@@ -42,27 +42,67 @@ cd ..\aws
 ```ts
 export const environment = {
   apiBaseUrl: 'https://e86tz73y7h.execute-api.us-east-1.amazonaws.com',
+  cognitoUserPoolId: 'us-east-1_ZCNHHYp51',
+  cognitoClientId: '2bpd6sftqdpuqietvclmm2olm5',
 };
 ```
 
-這個網址是 `aws/deploy.ps1` 部署完印出來的 `ApiUrl`。
+- `apiBaseUrl` 是 `aws/deploy.ps1` 印出的 `ApiUrl`
+- 另兩個是 `aws/deploy-auth.ps1` 印出的 `UserPoolId` / `UserPoolClientId`
+
+這三個都不是機密。Cognito 的 app client 刻意不帶 secret，因為瀏覽器無法保管密鑰。
 
 ## 檔案結構
 
 ```
 src/
-├─ environments/environment.ts              後端 API 網址
+├─ environments/environment.ts              API 網址 + Cognito 設定
+├─ polyfills.ts                             瀏覽器缺的 global（Cognito SDK 需要）
 ├─ styles.scss                              全域樣式
 └─ app/
-   ├─ app.config.ts                         註冊 HttpClient / animations
-   ├─ app.routes.ts                         路由（/kindergartens）
+   ├─ app.config.ts                         註冊 HttpClient / interceptor / animations
+   ├─ app.routes.ts                         路由（公開 + 需登入）
+   ├─ app.component.*                       外殼：頂端導覽列 + 登入狀態
+   ├─ guards/auth.guard.ts                  未登入導去 /login
+   ├─ interceptors/auth.interceptor.ts      只對 /api/secure/ 自動加 Bearer token
    ├─ models/kindergarten.model.ts          API 的 TypeScript 型別
-   ├─ services/kindergarten.service.ts      呼叫後端的唯一入口
-   └─ pages/kindergarten-list/              查詢畫面
-      ├─ kindergarten-list.component.ts
-      ├─ kindergarten-list.component.html
-      └─ kindergarten-list.component.scss
+   ├─ services/
+   │  ├─ kindergarten.service.ts            公開 API
+   │  ├─ secure-api.service.ts              需登入 API
+   │  └─ auth.service.ts                    Cognito 登入 / 登出 / 取 token
+   └─ pages/
+      ├─ kindergarten-list/                 公開查詢畫面
+      ├─ login/                             公務人員登入
+      └─ dashboard/                         登入後首頁（未來功能入口）
 ```
+
+## 路由
+
+| 路徑 | 登入 | 內容 |
+|---|---|---|
+| `/kindergartens` | 免 | 全國幼兒園查詢（預設頁） |
+| `/login` | 免 | 公務人員登入 |
+| `/dashboard` | **要** | 審查平臺，顯示身分與資料範圍；家長回報 / 財報 / 風險分析會掛在這底下 |
+
+## 登入怎麼運作
+
+用 `amazon-cognito-identity-js` 直接對 Cognito User Pool 認證（SRP 流程，
+密碼不會明文送出）。登入成功後 SDK 把 token 存進 localStorage，重新整理仍是登入狀態。
+
+一律使用 **ID token**，因為 `custom:county` 只出現在 ID token 裡。
+`authInterceptor` 只對 `/api/secure/` 的請求加 `Authorization` header，
+公開端點刻意不帶 token。
+
+`authGuard` 只是介面上的擋。**真正的資料保護在後端**：
+Lambda 用 token claims 決定縣市，前端傳什麼參數都無法越權。
+
+### 一個必須存在的 polyfill
+
+`src/polyfills.ts` 裡那一行 `window.global = window` 不能刪。
+`amazon-cognito-identity-js` 內部用到 Node 的 `buffer`，而 `buffer` 會存取 `global`。
+少了它，瀏覽器 console 會出現 `global is not defined`，而且**整個 Angular 都不會啟動**
+（不只是登入壞掉，是白畫面）。它同時要註冊在 `angular.json` 的 `polyfills`
+和 `tsconfig.app.json` 的 `files` 裡。
 
 ## 目前畫面做了什麼
 

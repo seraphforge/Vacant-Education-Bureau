@@ -121,6 +121,23 @@ Write-Host "==> 上傳 s3://$Bucket/$Key" -ForegroundColor Cyan
 Invoke-Aws @("s3", "cp", $ZipPath, "s3://$Bucket/$Key", "--region", $Region) | Out-Null
 
 # ---------- 5. 部署 CloudFormation ----------
+# 如果 auth stack（Cognito）已經部署過，就把它的輸出帶進來，
+# API 才會在 /api/secure/* 掛上 JWT 驗證。還沒部署就留空，authorizer 會被略過。
+$AuthStack = "$StackName-auth"
+$UserPoolClientId = ""
+$UserPoolIssuer   = ""
+if (Test-AwsSuccess @("cloudformation", "describe-stacks", "--stack-name", $AuthStack, "--region", $Region)) {
+    $authOut = (Invoke-Aws @("cloudformation", "describe-stacks", "--stack-name", $AuthStack,
+        "--region", $Region, "--query", "Stacks[0].Outputs", "--output", "json")) | ConvertFrom-Json
+    $UserPoolClientId = ($authOut | Where-Object { $_.OutputKey -eq "UserPoolClientId" }).OutputValue
+    $UserPoolIssuer   = ($authOut | Where-Object { $_.OutputKey -eq "UserPoolIssuer" }).OutputValue
+    Write-Host "==> 偵測到 Cognito stack，將啟用 JWT 驗證" -ForegroundColor Cyan
+    Write-Host "    ClientId = $UserPoolClientId"
+} else {
+    Write-Host "==> 沒有 Cognito stack（$AuthStack），/api/secure/* 不會建立" -ForegroundColor DarkYellow
+    Write-Host "    要啟用登入請先執行 .\deploy-auth.ps1"
+}
+
 Write-Host "==> 部署 CloudFormation stack: $StackName" -ForegroundColor Cyan
 $paramOverrides = @(
     "ProjectName=$ProjectName",
@@ -133,7 +150,9 @@ $paramOverrides = @(
     "DbPort=$DbPort",
     "DbName=$($Config.DbName)",
     "DbUser=$($Config.DbUser)",
-    "DbPassword=$($Config.DbPassword)"
+    "DbPassword=$($Config.DbPassword)",
+    "UserPoolClientId=$UserPoolClientId",
+    "UserPoolIssuer=$UserPoolIssuer"
 )
 
 Use-NativeErrorMode

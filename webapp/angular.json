@@ -46,10 +46,17 @@
             "index": "src/index.html",
             "browser": "src/main.ts",
             "polyfills": [
-              "zone.js"
+              "zone.js",
+              "src/polyfills.ts"
             ],
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
+            "allowedCommonJsDependencies": [
+              "buffer",
+              "js-cookie",
+              "isomorphic-unfetch",
+              "@aws-crypto/sha256-js"
+            ],
             "assets": [
               {
                 "glob": "**/*",
