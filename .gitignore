@@ -295,3 +295,14 @@ aws/deploy.config.ps1
 aws/build/
 aws/lambda.zip
 _tmp_*
+
+# 財報原始 PDF（不納入版控，屬原始資料來源）
+data/finance_pdf_cleaning/raw/**/*.pdf
+
+# Tesseract OCR 模型（可重新下載的第三方資產，不納入版控）
+data/finance_pdf_cleaning/tessdata/*.traineddata
+
+# 財報處理的暫存預覽與臨時檔
+data/finance_pdf_cleaning/processed/_tmp_preview/
+data/finance_pdf_cleaning/scripts/_tmp_*.py
+data/finance_pdf_cleaning/scripts/_tmp_*.txt
