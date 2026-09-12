@@ -1,0 +1,250 @@
+<p-toast></p-toast>
+
+<p-sidebar
+  [visible]="visible()"
+  (visibleChange)="onVisibleChange($event)"
+  position="right"
+  [style]="{ width: '92vw', maxWidth: '560px' }"
+  styleClass="case-drawer"
+>
+  <ng-template pTemplate="header">
+    <div class="drawer-head">
+      <i class="pi pi-inbox"></i>
+      <span>家長回報案件</span>
+      @if (kindergarten(); as kg) {
+        <small class="drawer-head__kg">{{ kg.school_name }}</small>
+      }
+    </div>
+  </ng-template>
+
+  <!-- ============ 詳情檢視 ============ -->
+  @if (detail(); as d) {
+    <div class="case">
+      <button
+        type="button"
+        pButton
+        class="p-button-text p-button-sm case__back"
+        icon="pi pi-arrow-left"
+        label="返回清單"
+        (click)="backToList()"
+      ></button>
+
+      <div class="case__head">
+        <div>
+          <span class="case__caseno">案號 {{ d.caseNo }}</span>
+          <p class="case__time">成案：{{ formatTaipei(d.createdAt) }}</p>
+        </div>
+        <p-tag [value]="d.statusLabel" [severity]="statusSeverity(d.status)"></p-tag>
+      </div>
+
+      <!-- 回報人 / 內容 -->
+      <section class="case__block">
+        <h4>回報內容</h4>
+        <p class="case__reporter">
+          回報人：{{ d.reporter.name || '（未具名）' }}
+          <span class="case__email">{{ d.reporter.email }}</span>
+        </p>
+        <p class="case__content">{{ d.content }}</p>
+        @if (d.attachments.length > 0) {
+          <div class="case__attachments">
+            @for (a of d.attachments; track a.id) {
+              <a class="case__attach" [href]="a.url" target="_blank" rel="noopener noreferrer">
+                <i class="pi pi-paperclip"></i>{{ a.fileName }}
+              </a>
+            }
+          </div>
+        }
+      </section>
+
+      <!-- A. 標記處理進度 -->
+      <section class="case__block">
+        <div class="block-head">
+          <h4>處理進度</h4>
+          @if (statusDirty()) {
+            <span class="badge badge--dirty"><i class="pi pi-pencil"></i> 尚未儲存</span>
+          } @else {
+            <span class="badge badge--saved"><i class="pi pi-check"></i> 已儲存</span>
+          }
+        </div>
+
+        <div class="field">
+          <label>狀態</label>
+          <p-dropdown
+            [options]="statusOptions"
+            optionLabel="label"
+            optionValue="value"
+            [ngModel]="formStatus()"
+            (ngModelChange)="formStatus.set($event)"
+            appendTo="body"
+            styleClass="w-full"
+          ></p-dropdown>
+        </div>
+
+        @if (statusReasonRequired()) {
+          <div class="field">
+            <label>不受理理由 <span class="req">*</span></label>
+            <textarea
+              pInputTextarea
+              rows="2"
+              [ngModel]="formStatusReason()"
+              (ngModelChange)="formStatusReason.set($event)"
+              placeholder="請說明不受理原因（會顯示在家長追蹤頁）"
+            ></textarea>
+            @if (statusReasonMissing()) {
+              <small class="err-text">不受理必須填寫理由</small>
+            }
+          </div>
+        }
+
+        <div class="field field--switch">
+          <label>儲存時 email 通知家長</label>
+          <p-inputSwitch
+            [ngModel]="notifyOnStatus()"
+            (ngModelChange)="notifyOnStatus.set($event)"
+          ></p-inputSwitch>
+        </div>
+
+        <button
+          type="button"
+          pButton
+          icon="pi pi-save"
+          label="儲存處理進度"
+          [disabled]="!canSaveStatus()"
+          [loading]="savingStatus()"
+          (click)="saveStatus()"
+        ></button>
+      </section>
+
+      <!-- 訊息串 -->
+      <section class="case__block">
+        <h4>訊息紀錄</h4>
+        @if (d.messages.length === 0) {
+          <p class="case__empty">尚無訊息。</p>
+        } @else {
+          <div class="msgs">
+            @for (m of d.messages; track m.id) {
+              <div class="msg" [attr.data-kind]="m.kind">
+                <div class="msg__meta">
+                  <span class="msg__author">{{ m.authorDisplay || '系統' }}</span>
+                  <span class="msg__time">{{ formatTaipei(m.createdAt) }}</span>
+                </div>
+                @switch (m.kind) {
+                  @case ('reply') {
+                    <span class="msg__badge msg__badge--reply"><i class="pi pi-send"></i> 對外回覆</span>
+                    <p class="msg__body">{{ m.body }}</p>
+                    @if (m.emailedAt) {
+                      <small class="msg__emailed"><i class="pi pi-envelope"></i> 已 email 通知</small>
+                    }
+                  }
+                  @case ('internal_note') {
+                    <span class="msg__badge msg__badge--note"><i class="pi pi-lock"></i> 內部備註</span>
+                    <p class="msg__body">{{ m.body }}</p>
+                  }
+                  @case ('status_change') {
+                    <p class="msg__system">
+                      狀態變更：{{ m.fromStatus }} → {{ m.toStatus }}
+                    </p>
+                  }
+                  @default {
+                    <p class="msg__system">{{ m.body }}</p>
+                  }
+                }
+              </div>
+            }
+          </div>
+        }
+      </section>
+
+      <!-- B. 回覆家長 / 內部備註 -->
+      <section class="case__block case__compose" [attr.data-kind]="messageKind()">
+        <h4>新增訊息</h4>
+
+        <p-selectButton
+          [options]="kindOptions"
+          optionLabel="label"
+          optionValue="value"
+          [ngModel]="messageKind()"
+          (ngModelChange)="messageKind.set($event)"
+          [allowEmpty]="false"
+        ></p-selectButton>
+
+        @if (messageKind() === 'reply') {
+          <p-message
+            severity="info"
+            text="對外回覆：家長會在追蹤頁看到這則訊息。"
+            styleClass="compose__hint"
+          ></p-message>
+        } @else {
+          <p-message
+            severity="warn"
+            text="內部備註：僅內部可見，不會通知也不會顯示給家長。"
+            styleClass="compose__hint"
+          ></p-message>
+        }
+
+        <textarea
+          pInputTextarea
+          rows="3"
+          [ngModel]="messageBody()"
+          (ngModelChange)="messageBody.set($event)"
+          [placeholder]="messageKind() === 'reply' ? '輸入要回覆給家長的內容…' : '輸入內部備註（不對外）…'"
+        ></textarea>
+
+        @if (messageKind() === 'reply') {
+          <div class="field field--switch">
+            <label>送出時 email 通知家長</label>
+            <p-inputSwitch
+              [ngModel]="notifyOnReply()"
+              (ngModelChange)="notifyOnReply.set($event)"
+            ></p-inputSwitch>
+          </div>
+        }
+
+        <button
+          type="button"
+          pButton
+          [icon]="messageKind() === 'reply' ? 'pi pi-send' : 'pi pi-lock'"
+          [label]="messageKind() === 'reply' ? '送出回覆' : '儲存內部備註'"
+          [class]="messageKind() === 'reply' ? '' : 'p-button-warning'"
+          [disabled]="!canSendMessage()"
+          [loading]="sendingMessage()"
+          (click)="sendMessage()"
+        ></button>
+      </section>
+    </div>
+  } @else if (detailLoading()) {
+    <div class="drawer-center">
+      <p-progressSpinner strokeWidth="4" [style]="{ width: '40px', height: '40px' }"></p-progressSpinner>
+    </div>
+  } @else {
+    <!-- ============ 清單檢視 ============ -->
+    @if (listLoading()) {
+      <div class="drawer-center">
+        <p-progressSpinner strokeWidth="4" [style]="{ width: '40px', height: '40px' }"></p-progressSpinner>
+      </div>
+    } @else if (reports().length === 0) {
+      <div class="drawer-center drawer-empty">
+        <i class="pi pi-inbox"></i>
+        <p>這間幼兒園目前沒有家長回報案件。</p>
+      </div>
+    } @else {
+      <ul class="report-list">
+        @for (r of reports(); track r.id) {
+          <li class="report-list__item" (click)="openCase(r)" tabindex="0" (keydown.enter)="openCase(r)">
+            <div class="report-list__top">
+              <span class="report-list__caseno">{{ r.caseNo }}</span>
+              <p-tag [value]="r.statusLabel" [severity]="statusSeverity(r.status)"></p-tag>
+            </div>
+            <p class="report-list__excerpt">{{ r.contentExcerpt }}</p>
+            <div class="report-list__meta">
+              <span>{{ formatTaipei(r.createdAt) }}</span>
+              @if (r.attachmentCount > 0) {
+                <span><i class="pi pi-paperclip"></i> {{ r.attachmentCount }}</span>
+              }
+            </div>
+          </li>
+        }
+      </ul>
+    }
+  }
+</p-sidebar>

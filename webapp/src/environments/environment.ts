@@ -8,15 +8,12 @@
  * 這三個都不是機密：Client Id 本來就會出現在瀏覽器端，
  * Cognito 的 app client 也刻意不帶 secret（SPA 無法保管密鑰）。
  *
- * useMockApi        規劃中（尚未上線）的家長回報 / 政府端回報 / 風險評估
- *                   端點會走 mock 實作（回傳與 API_SPEC 契約對齊的假資料）。
- *                   後端上線後把這個關成 false，元件不用改。
- *                   已上線的端點（/api/kindergartens、/api/counties、
- *                   /api/secure/me、/api/secure/kindergartens）不受此旗標影響。
+ * 註：mock 切換不放在這裡的全域旗標，而是由各 service 內部各自控制
+ * （ReportService §2/§3、SecureReportService 的風險 §4.8 目前仍 mock），
+ * 這樣某一塊 API 上線時不會牽動其他仍在 mock 的功能。
  */
 export const environment = {
   apiBaseUrl: 'https://e86tz73y7h.execute-api.us-east-1.amazonaws.com',
   cognitoUserPoolId: 'us-east-1_ZCNHHYp51',
   cognitoClientId: '2bpd6sftqdpuqietvclmm2olm5',
-  useMockApi: true,
 };

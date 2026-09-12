@@ -17,9 +17,12 @@ import {
 
 /**
  * 家長回報流程 + 追蹤頁（API_SPEC §2、§3）。
- * 這些端點在 API_SPEC 標記「規劃中」，故此 service 在 environment.useMockApi
- * 為 true 時走 mock 實作（回傳與契約對齊的假資料）。
- * 後端上線後把旗標關掉即可，元件完全不用改。
+ * 這些端點在 API_SPEC 標記「規劃中」，故此 service 用自己的內部旗標 mock
+ * 走 mock 實作（回傳與契約對齊的假資料）。後端上線後把 mock 設 false 即可，
+ * 元件完全不用改。
+ *
+ * 註：mock 切換刻意做成各 service 內部獨立旗標，而非單一全域旗標，
+ * 這樣某一塊 API 上線時不會影響其他仍在 mock 的功能。
  *
  * 全部走公開路徑（/api/...），不帶 Authorization header。
  */
@@ -27,7 +30,8 @@ import {
 export class ReportService {
   private http = inject(HttpClient);
   private base = `${environment.apiBaseUrl}/api`;
-  private mock = environment.useMockApi;
+  /** 家長回報 §2/§3 尚未上線，維持 mock；後端完成後設為 false。 */
+  private readonly mock = true;
 
   /** mock 用：記住每張草稿正確的驗證碼與剩餘嘗試次數 */
   private mockDrafts = new Map<number, { otp: string; attemptsLeft: number; email: string }>();

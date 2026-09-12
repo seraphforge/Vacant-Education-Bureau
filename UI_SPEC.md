@@ -181,6 +181,65 @@
   2. 來源
   3. 日期
 
+### 6.4 行政人員處理進度標記與回覆（家長回報案件）
+
+> 對應 API_SPEC §4.3～§4.7（皆已上線）。此功能讓登入的行政人員檢視某幼兒園的家長回報案件、
+> 標記處理進度，並回覆家長或新增內部備註；家長端會在 `/report/<TOKEN>` 追蹤頁看到進度與對外回覆。
+
+#### 6.4.1 呈現方式與理由（設計決定）
+
+- [x] **不放進 §6.3 的「詳細資料」Tabbed Floating Panel**。理由：該面板呈現的是「學校整體風險資料」（風險/財報/輿情），
+      是唯讀的分析視角；而本功能是「針對單筆家長回報案件的處理作業（讀 + 寫）」，兩者資料層級（學校 vs 單一案件）
+      與互動性質（檢視 vs 操作）都不同，混在一起會讓面板職責不清。
+- [x] **採用獨立的側邊 Drawer（PrimeNG `p-sidebar`，由右側滑出）** 承載本功能。選擇 Drawer 而非另開頁面或 Dialog 的理由：
+  1. 行政人員通常是「一邊看表格、一邊處理案件」，Drawer 從側邊滑出、可快速開關，不離開 dashboard 情境。
+  2. 案件內容 + 訊息串 + 操作表單資訊量較大，Drawer 的高度可捲動空間比 Dialog 更適合。
+  3. 與既有 PrimeNG 慣例一致，不引入新的 UI library。
+- [x] 在主表格（§6.2.1）既有「詳細資料（風險）」按鈕之外，**新增一個獨立操作按鈕「回報案件」**，點擊開啟本 Drawer。
+
+#### 6.4.2 Drawer 內容
+
+- [x] 建立 `ReportCaseDrawerComponent`
+- [x] Drawer 開啟時，依該幼兒園 `kindergartenId` 呼叫 `GET /api/secure/reports?kindergartenId=…` 取得該園的家長回報清單
+- [x] 以清單（含案號、狀態標籤、成案時間、內容摘要）呈現；點選一筆進入該案件詳情
+- [x] 案件詳情呼叫 `GET /api/secure/reports/{id}`，顯示：
+  - [x] 狀態與目前處理階段
+  - [x] 回報人姓名 / email、回報內容、附件
+  - [x] 訊息串（`messages`）：依 `kind` 區分對外回覆 / 內部備註 / 狀態變更 / 系統事件
+
+##### A. 標記處理進度（狀態）
+
+- [x] 提供狀態選擇（對應追蹤頁四個階段）：`submitted`(已報報)、`investigating`(調查中)、`closed`(調查完畢)、`rejected`(不受理)
+  - 備註：送出的是 enum 值，顯示用後端回傳的 `statusLabel`（沿用家長端「已報報」用字）。
+- [x] 選 `rejected`(不受理) 時，**強制要求填寫理由** `statusReason`（對應 API_SPEC §4.7 `STATUS_REASON_REQUIRED`）
+- [x] 提供「是否 email 通知家長」開關（`notifyParent`）
+- [x] 呼叫 `PATCH /api/secure/reports/{id}` 儲存；回應為完整詳情物件，直接覆蓋畫面狀態
+
+##### B. 回覆家長 / 內部備註
+
+- [x] 呼叫 `POST /api/secure/reports/{id}/messages`，支援兩種 `kind`：
+  - `reply`：**對外回覆，家長在追蹤頁看得到**
+  - `internal_note`：**內部備註，不對外顯示**
+- [x] **兩種模式用明顯 UI 區隔**，避免誤把內部備註當對外回覆送出：
+  - [x] 以切換（Radio / SelectButton）選擇模式
+  - [x] 對外回覆（reply）採藍色主色 + `pi pi-send` 圖示，並顯示「家長看得到」提示
+  - [x] 內部備註（internal_note）採灰/黃警示色 + `pi pi-lock` 圖示，並顯示「僅內部可見，不會通知家長」提示
+  - [x] 送出按鈕文字隨模式變化（「送出回覆」 vs 「儲存內部備註」）
+- [x] `reply` 模式提供 `notifyParent` 開關（`internal_note` 不顯示此開關）
+
+##### C. 尚未修改 vs 已儲存狀態（避免誤會已送出）
+
+- [x] 狀態下拉、理由、訊息輸入框只要與伺服器目前值不同，就顯示「尚未儲存」標示（dirty 標記 / 未儲存徽章）
+- [x] 成功呼叫 API 後，更新畫面為最新值並清除 dirty 標記、顯示「已儲存」提示（Toast）
+- [x] 訊息送出成功後清空輸入框並把新訊息加入訊息串
+- [x] 儲存過程中按鈕顯示 loading，避免重複送出
+
+#### 6.4.3 API 上線範圍決定（本次）
+
+- [x] `/api/secure/me`、`/api/secure/kindergartens`（§4.1 / §4.2）與回報相關端點 §4.3～§4.7 **皆已上線，改呼叫真實 API**
+- [x] 風險評估 §4.8 **維持 mock**，直到後端完成
+- [x] 為避免風險 API 上線時又要動到已正常運作的回報功能，mock 切換改為**各 service 內部獨立旗標**，不再用單一全域 `useMockApi`
+
 ---
 
 ## 7. 待確認事項彙整（Open Items）
@@ -206,3 +265,4 @@
   - [x] `RiskAssessmentTabComponent`（風險評估 + 雷達圖）
   - [x] `FinancialReportTabComponent`（財報表格；殼，待 API）
   - [x] `PublicOpinionTabComponent`（輿情分析表格；殼，待 API）
+- [x] `ReportCaseDrawerComponent`（行政人員處理進度標記與回覆，側邊 Drawer；見 §6.4）

@@ -54,3 +54,9 @@
   color: #dc2626; /* 紅色：風險指數 60–79（medium） */
   font-weight: 600;
 }
+
+.dash__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}

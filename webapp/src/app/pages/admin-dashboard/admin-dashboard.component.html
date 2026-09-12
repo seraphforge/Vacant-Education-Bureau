@@ -38,7 +38,7 @@
           <th>鄉鎮市區</th>
           <th>地址</th>
           <th style="width: 10rem">電話</th>
-          <th style="width: 8rem">詳細資料</th>
+          <th style="width: 15rem">操作</th>
         </tr>
       </ng-template>
 
@@ -51,14 +51,24 @@
           <td>{{ kg.address }}</td>
           <td>{{ kg.phone }}</td>
           <td>
-            <button
-              type="button"
-              pButton
-              class="p-button-sm p-button-outlined"
-              icon="pi pi-search"
-              label="查看"
-              (click)="openDetail(kg)"
-            ></button>
+            <div class="dash__actions">
+              <button
+                type="button"
+                pButton
+                class="p-button-sm p-button-outlined"
+                icon="pi pi-search"
+                label="詳細資料"
+                (click)="openDetail(kg)"
+              ></button>
+              <button
+                type="button"
+                pButton
+                class="p-button-sm p-button-outlined p-button-secondary"
+                icon="pi pi-inbox"
+                label="回報案件"
+                (click)="openCases(kg)"
+              ></button>
+            </div>
           </td>
         </tr>
       </ng-template>
@@ -72,8 +82,14 @@
   </main>
 </div>
 
-<!-- 詳細資料 Tabbed 浮動面板（selected() 非 null 時開啟） -->
+<!-- 詳細資料 Tabbed 浮動面板（風險/財報/輿情，selected() 非 null 時開啟） -->
 <app-school-detail-panel
   [kindergarten]="selected()"
   (closed)="closeDetail()"
 ></app-school-detail-panel>
+
+<!-- 行政人員處理進度標記與回覆側邊 Drawer（caseTarget() 非 null 時開啟，§6.4） -->
+<app-report-case-drawer
+  [kindergarten]="caseTarget()"
+  (closed)="closeCases()"
+></app-report-case-drawer>

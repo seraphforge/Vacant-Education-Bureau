@@ -4,6 +4,7 @@ import { TableLazyLoadEvent, TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
 import { HeaderComponent } from '../../components/header/header.component';
+import { ReportCaseDrawerComponent } from '../../components/report-case-drawer/report-case-drawer.component';
 import { SchoolDetailPanelComponent } from '../../components/school-detail-panel/school-detail-panel.component';
 import { Kindergarten } from '../../models/kindergarten.model';
 import { MeResponse, SecureApiService } from '../../services/secure-api.service';
@@ -23,6 +24,7 @@ import { MeResponse, SecureApiService } from '../../services/secure-api.service'
   imports: [
     HeaderComponent,
     SchoolDetailPanelComponent,
+    ReportCaseDrawerComponent,
     TableModule,
     ButtonModule,
     TagModule,
@@ -39,8 +41,10 @@ export class AdminDashboardComponent {
   readonly loading = signal(false);
   readonly pageSize = 20;
 
-  /** 被選來看詳情的幼兒園；非 null 時開啟面板（Phase 7 綁定） */
+  /** 被選來看詳情的幼兒園；非 null 時開啟風險面板（§6.3） */
   readonly selected = signal<Kindergarten | null>(null);
+  /** 被選來處理家長回報案件的幼兒園；非 null 時開啟 Drawer（§6.4） */
+  readonly caseTarget = signal<Kindergarten | null>(null);
 
   constructor() {
     this.secure.me().subscribe({
@@ -96,6 +100,14 @@ export class AdminDashboardComponent {
 
   closeDetail(): void {
     this.selected.set(null);
+  }
+
+  openCases(kg: Kindergarten): void {
+    this.caseTarget.set(kg);
+  }
+
+  closeCases(): void {
+    this.caseTarget.set(null);
   }
 
   displayScore(kg: Kindergarten): string {
