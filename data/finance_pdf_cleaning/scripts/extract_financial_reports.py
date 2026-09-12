@@ -97,6 +97,27 @@ INCOME_STATEMENT_PROMPT = """你正在處理幼兒園財報第 6 頁的收支餘
 {"科目": "表格中的完整科目名稱", "金額": "該科目金額", "年度": "報告學年度"}
 保留括號負數、逗號與原始幣別；無法辨識的金額填 null。不要自行計算或四捨五入。
 """
+CASH_FLOW_PROMPT = """你正在處理幼兒園財報第 9 頁的現金流量表，含本年度與前一年度兩欄。
+請逐列讀取表格，輸出 JSON 陣列，不要輸出 Markdown 或說明文字。
+每列格式必須是：
+{"項目": "表格中的完整項目名稱", "本年度金額": "", "前年度金額": ""}
+本年度是報告檔名學年度（左欄，例如 113.8.1~114.7.31），前年度是右欄（例如 112.8.1~113.7.31）。
+保留括號負數與逗號；表格中的破折號「-」請填 null；無法辨識填 null。忠實抄錄，不要自行計算。
+"""
+APPENDIX2_PROMPT = """你正在處理幼兒園財報「附表二：經費流用及勻支檢查表」。
+請逐列讀取表格，輸出 JSON 陣列，不要輸出 Markdown 或說明文字。
+每列格式必須是：
+{"項目": "表格中的完整項目名稱", "預算數": "", "決算數": "", "差異數": "", "差異率": "", "預決算檢查結果": ""}
+預算數為 A 欄、決算數為 B 欄、差異數為 B-A 欄、差異率為差異%欄；預決算檢查結果為最後一欄的文字（例如「未超支」）。
+保留括號負數與逗號；差異率只保留數字；破折號「-」與空白填 null。忠實抄錄，不要自行計算。
+"""
+APPENDIX4_PROMPT = """你正在處理幼兒園財報「附表四：財產清冊」的其中一頁。
+請逐列讀取表格，輸出 JSON 陣列，不要輸出 Markdown 或說明文字。
+每列格式必須是：
+{"分類": "", "財產編號": "", "登錄號分號": "", "財產名稱": "", "原始價值": "", "數量": "", "帳面價值": "", "使用年限": "", "購置日期": ""}
+分類指表格上方的類別標題（例如「代管財產」「自置財產」），同一類別下的每列都填相同分類；若該頁沒有新標題，分類填 null。
+財產名稱若跨兩行請合併為完整名稱。保留金額的逗號；無法辨識的值填 null。忠實抄錄，不要自行計算或補齊。
+"""
 NOTES_PROMPT = """你正在處理幼兒園財報「財務報表附註」中的段落，圖片可能包含多頁。
 請只抽取以下三個主題段落，其餘段落（如賸餘款執行概況、重大之期後事項、法源依據）一律忽略：
 1. 關係人交易
@@ -209,6 +230,36 @@ def parse_args() -> argparse.Namespace:
         "--notes-pages",
         default="22,23",
         help="附註段落所在頁碼，以逗號分隔，預設 22,23",
+    )
+    parser.add_argument(
+        "--cash-flow-only",
+        action="store_true",
+        help="只抽取現金流量表",
+    )
+    parser.add_argument(
+        "--cash-flow-pages",
+        default="9",
+        help="現金流量表所在頁碼，預設 9",
+    )
+    parser.add_argument(
+        "--appendix2-only",
+        action="store_true",
+        help="只抽取附表二：經費流用及勻支檢查表",
+    )
+    parser.add_argument(
+        "--appendix2-pages",
+        default="25",
+        help="附表二所在頁碼，預設 25",
+    )
+    parser.add_argument(
+        "--appendix4-only",
+        action="store_true",
+        help="只抽取附表四：財產清冊（多頁逐頁合併）",
+    )
+    parser.add_argument(
+        "--appendix4-pages",
+        default="28,32",
+        help="附表四頁碼範圍，起訖以逗號分隔，預設 28,32",
     )
     parser.add_argument("--kindergarten", help="只處理指定幼兒園名稱或代碼")
     parser.add_argument("--school-year", help="只處理指定學年度，例如 113")
@@ -627,6 +678,125 @@ def request_notes(provider: str, images: list[Image.Image]) -> list[dict[str, An
     return clean_table_response(response.text or "")
 
 
+def request_table(
+    provider: str, images: list[Image.Image], prompt: str
+) -> list[dict[str, Any]]:
+    """通用：送出圖片與 prompt，回傳逐列 JSON 陣列（用於現金流量表、附表二、附表四）。"""
+    if provider == "openai":
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image_to_data_url(image)}}
+            for image in images
+        )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": content}],
+        )
+        return clean_table_response(response.choices[0].message.content or "")
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=types.HttpOptions(timeout=120000),
+    )
+    contents: list[Any] = [prompt]
+    for image in images:
+        buffer = BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=95)
+        contents.append(
+            types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
+        )
+    response = client.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        contents=contents,
+        config=types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
+    )
+    return clean_table_response(response.text or "")
+
+
+def write_cash_flow_csv(output: Path, pdf_path: Path, rows: list[dict[str, Any]]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    current_year = report_school_year(pdf_path)
+    columns = ["檔案名稱", "項目", f"{current_year}學年度金額", f"{current_year - 1}學年度金額"]
+    with output.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "檔案名稱": pdf_path.name,
+                    "項目": row.get("項目"),
+                    f"{current_year}學年度金額": row.get("本年度金額"),
+                    f"{current_year - 1}學年度金額": row.get("前年度金額"),
+                }
+            )
+
+
+def write_appendix2_csv(output: Path, pdf_path: Path, rows: list[dict[str, Any]]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    columns = ["檔案名稱", "報告學年度", "項目", "預算數", "決算數", "差異數", "差異率", "預決算檢查結果"]
+    with output.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "檔案名稱": pdf_path.name,
+                    "報告學年度": f"{report_school_year(pdf_path)}學年度",
+                    "項目": row.get("項目"),
+                    "預算數": row.get("預算數"),
+                    "決算數": row.get("決算數"),
+                    "差異數": row.get("差異數"),
+                    "差異率": row.get("差異率"),
+                    "預決算檢查結果": row.get("預決算檢查結果"),
+                }
+            )
+
+
+def write_appendix4_csv(output: Path, pdf_path: Path, rows: list[dict[str, Any]]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "檔案名稱",
+        "分類",
+        "財產編號",
+        "登錄號分號",
+        "財產名稱",
+        "原始價值",
+        "數量",
+        "帳面價值",
+        "使用年限",
+        "購置日期",
+    ]
+    with output.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "檔案名稱": pdf_path.name,
+                    "分類": row.get("分類"),
+                    "財產編號": row.get("財產編號"),
+                    "登錄號分號": row.get("登錄號分號"),
+                    "財產名稱": row.get("財產名稱"),
+                    "原始價值": row.get("原始價值"),
+                    "數量": row.get("數量"),
+                    "帳面價值": row.get("帳面價值"),
+                    "使用年限": row.get("使用年限"),
+                    "購置日期": row.get("購置日期"),
+                }
+            )
+
+
 def write_notes_csv(
     output: Path,
     pdf_path: Path,
@@ -843,6 +1013,83 @@ def extract_notes_only(
     print(f"  抽取附註段落（第 {'、'.join(str(p) for p in pages)} 頁）")
     rows = request_notes(provider, images)
     write_notes_csv(output, pdf_path, rows)
+
+
+def _convert_pages(
+    pdf_path: Path, dpi: int, poppler_path: Path | None, pages: list[int]
+) -> list[Image.Image]:
+    convert_options: dict[str, Any] = {"dpi": dpi, "fmt": "jpeg"}
+    if poppler_path:
+        convert_options["poppler_path"] = str(poppler_path)
+    return convert_from_path(
+        str(pdf_path),
+        first_page=min(pages),
+        last_page=max(pages),
+        **convert_options,
+    )
+
+
+def extract_cash_flow_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+) -> None:
+    """只抽取現金流量表（預設第 9 頁）。"""
+    images = _convert_pages(pdf_path, dpi, poppler_path, pages)
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取現金流量表")
+    print(f"  抽取現金流量表（第 {'、'.join(str(p) for p in pages)} 頁）")
+    rows = request_table(provider, images, CASH_FLOW_PROMPT)
+    write_cash_flow_csv(output, pdf_path, rows)
+
+
+def extract_appendix2_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+) -> None:
+    """只抽取附表二：經費流用及勻支檢查表（預設第 25 頁）。"""
+    images = _convert_pages(pdf_path, dpi, poppler_path, pages)
+    if not images:
+        raise ValueError(f"PDF 沒有第 {pages} 頁，無法抽取附表二")
+    print(f"  抽取附表二（第 {'、'.join(str(p) for p in pages)} 頁）")
+    rows = request_table(provider, images, APPENDIX2_PROMPT)
+    write_appendix2_csv(output, pdf_path, rows)
+
+
+def extract_appendix4_only(
+    pdf_path: Path,
+    provider: str,
+    dpi: int,
+    poppler_path: Path | None,
+    pages: list[int],
+    output: Path,
+) -> None:
+    """只抽取附表四：財產清冊（預設第 28~32 頁），逐頁抽取後合併，分類向下填充。"""
+    all_rows: list[dict[str, Any]] = []
+    last_category: Any = None
+    for page in range(min(pages), max(pages) + 1):
+        images = _convert_pages(pdf_path, dpi, poppler_path, [page])
+        if not images:
+            continue
+        print(f"  抽取附表四第 {page} 頁")
+        rows = request_table(provider, images, APPENDIX4_PROMPT)
+        for row in rows:
+            category = str(row.get("分類") or "").strip()
+            if category:
+                last_category = category
+            else:
+                row["分類"] = last_category
+            all_rows.append(row)
+    if not all_rows:
+        raise ValueError(f"PDF 第 {pages} 頁沒有可抽取的財產清冊資料")
+    write_appendix4_csv(output, pdf_path, all_rows)
 
 
 def write_balance_sheet_csv(
@@ -1100,6 +1347,9 @@ def main() -> int:
         ensure_api_key(args.provider)
     appendix3_pages = [int(p) for p in str(args.appendix3_pages).split(",") if p.strip()]
     notes_pages = [int(p) for p in str(args.notes_pages).split(",") if p.strip()]
+    cash_flow_pages = [int(p) for p in str(args.cash_flow_pages).split(",") if p.strip()]
+    appendix2_pages = [int(p) for p in str(args.appendix2_pages).split(",") if p.strip()]
+    appendix4_pages = [int(p) for p in str(args.appendix4_pages).split(",") if p.strip()]
     pdf_files = sorted(args.input_dir.rglob("*.pdf"))
     if args.kindergarten:
         query = args.kindergarten.casefold()
@@ -1151,8 +1401,44 @@ def main() -> int:
             pdf_path,
             f"{prefix}_財務報表附註_關係人交易質抵押重大承諾",
         )
+        cash_flow_output = table_output_path(
+            table_output_base, pdf_path, f"{prefix}_現金流量表"
+        )
+        appendix2_output = table_output_path(
+            table_output_base, pdf_path, f"{prefix}_附表二_經費流用及勻支檢查表"
+        )
+        appendix4_output = table_output_path(
+            table_output_base, pdf_path, f"{prefix}_附表四_財產清冊"
+        )
         try:
-            if args.notes_only:
+            if args.cash_flow_only:
+                extract_cash_flow_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    cash_flow_pages,
+                    cash_flow_output,
+                )
+            elif args.appendix2_only:
+                extract_appendix2_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    appendix2_pages,
+                    appendix2_output,
+                )
+            elif args.appendix4_only:
+                extract_appendix4_only(
+                    pdf_path,
+                    args.provider,
+                    args.dpi,
+                    args.poppler_path,
+                    appendix4_pages,
+                    appendix4_output,
+                )
+            elif args.notes_only:
                 extract_notes_only(
                     pdf_path,
                     args.provider,
@@ -1203,14 +1489,23 @@ def main() -> int:
             row["錯誤訊息"] = str(error)
             print(f"  失敗：{error}", file=sys.stderr)
         rows.append(row)
-        if not args.ocr and not args.index_only and not args.appendix3_only and not args.notes_only:
+        table_only_mode = (
+            args.appendix3_only
+            or args.notes_only
+            or args.cash_flow_only
+            or args.appendix2_only
+            or args.appendix4_only
+        )
+        if not args.ocr and not args.index_only and not table_only_mode:
             report_output = school_output_dir(data_root / "processed", pdf_path) / f"{prefix}_財報摘要.csv"
             with report_output.open("w", newline="", encoding="utf-8-sig") as report_file:
                 writer = csv.DictWriter(report_file, fieldnames=CSV_COLUMNS)
                 writer.writeheader()
                 writer.writerow(row)
 
-    if args.notes_only:
+    if args.cash_flow_only or args.appendix2_only or args.appendix4_only:
+        print(f"完成指定表格抽取，共 {len(rows)} 份 PDF")
+    elif args.notes_only:
         print(f"完成附註段落抽取，共 {len(rows)} 份 PDF")
     elif args.appendix3_only:
         print(f"完成附表三抽取，共 {len(rows)} 份 PDF")
