@@ -133,7 +133,7 @@ def main():
     result.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"寫出風險評分：{out_path}（{len(result)} 列，{result['幼兒園ID'].nunique()} 園）")
 
-    cols = ["幼兒園ID", "年份", "每生人事費", "師生比", "加班費負荷", "法遵風險指數", "風險燈號"]
+    cols = ["幼兒園ID", "年份", "每生人事費", "師生比", "加班費負荷", "法遵風險指數", "整體風險等級"]
     cols = [c for c in cols if c in result.columns]
     v = result[result["年份"] == 113][cols].copy()
     for c in ("每生人事費",):

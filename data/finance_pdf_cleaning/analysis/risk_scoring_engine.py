@@ -26,7 +26,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-# 確保含 emoji 燈號的輸出在 Windows 終端（cp950）也能正常顯示
+# 確保含中文的輸出在 Windows 終端（cp950）也能正常顯示
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -38,6 +38,14 @@ EARLIEST = {"收支": 109, "非收支": 110}
 
 # 費用科目（用於結構占比、波動度、YoY）
 EXPENSE_ITEMS = ["人事費", "業務費", "材料費", "食材費", "維護費", "修繕購置費", "業務發展費", "其他支出"]
+
+# 嚴重程度分級（以文字＋數字表示，數字越大越嚴重，取代原本的顏色符號）
+LEVEL_RED = "RED"        # 高度異常
+LEVEL_YELLOW = "YELLOW"  # 中度異常
+LEVEL_GREEN = "GREEN"    # 正常
+LEVEL_NA = "N/A"         # 資料不足，無法判定
+LEVEL_RANK = {LEVEL_RED: 3, LEVEL_YELLOW: 2, LEVEL_GREEN: 1, LEVEL_NA: 0}
+LEVEL_POINTS = {LEVEL_RED: 2.0, LEVEL_YELLOW: 1.0, LEVEL_GREEN: 0.0, LEVEL_NA: 0.0}
 
 
 # ---------------------------------------------------------------------------
@@ -332,10 +340,11 @@ class KindergartenRiskScoringEngine:
     三維度：
       1. 歷年自我比較 (Self-Historical)：與該園前 1-3 年比，Z-score。
       2. 同業相對比較 (Peer-Relative)：同縣市、同規模(人數帶)群體，Z-score。
-      3. 事件前後比較 (Pre/Post-Event)：給定事件年份，回溯事件前 1-2 年哪些指標已亮紅燈。
+      3. 事件前後比較 (Pre/Post-Event)：給定事件年份，回溯事件前 1-2 年哪些指標已達 RED。
 
-    燈號規則（可調）：任一維度偏離度 |z| >= red_th → 🔴；>= yellow_th → 🟡；否則 🟢。
-    法遵風險指數 = 各指標各維度紅/黃燈的加權計分之總和（0~100 正規化）。
+    嚴重程度規則（可調）：任一維度偏離度 |z| >= red_th → RED；>= yellow_th → YELLOW；否則 GREEN。
+    資料不足為 N/A。各等級數字見 LEVEL_RANK（RED=3, YELLOW=2, GREEN=1, N/A=0）。
+    法遵風險指數 = 各指標 RED/YELLOW 的加權計分之總和（0~100 正規化）。
     """
 
     def __init__(
@@ -416,13 +425,13 @@ class KindergartenRiskScoringEngine:
     @staticmethod
     def _flag(z: float, yellow_th: float, red_th: float, higher_bad: bool) -> str:
         if pd.isna(z):
-            return "⚪"  # 資料不足
+            return LEVEL_NA  # 資料不足
         signed = z if higher_bad else -z
         if signed >= red_th:
-            return "🔴"
+            return LEVEL_RED
         if signed >= yellow_th:
-            return "🟡"
-        return "🟢"
+            return LEVEL_YELLOW
+        return LEVEL_GREEN
 
     def score(
         self,
@@ -444,46 +453,48 @@ class KindergartenRiskScoringEngine:
         for spec in self.indicators:
             col = spec.column
             if col not in df:
-                # 指標缺欄位：整欄 NaN，燈號 ⚪
+                # 指標缺欄位：整欄 NaN，等級 N/A
                 df[f"{spec.key}_歷年z"] = np.nan
                 df[f"{spec.key}_同業z"] = np.nan
-                df[f"{spec.key}_燈號"] = "⚪"
+                df[f"{spec.key}_等級"] = LEVEL_NA
+                df[f"{spec.key}_等級分數"] = LEVEL_RANK[LEVEL_NA]
                 continue
             zh = self._self_historical_z(df, col)
             zp = self._peer_relative_z(df, col)
             df[f"{spec.key}_歷年z"] = zh
             df[f"{spec.key}_同業z"] = zp
-            # 綜合燈號：取兩維度中較嚴重者
+            # 綜合等級：取兩維度中較嚴重者
             flags_h = [self._flag(z, self.yellow_th, self.red_th, spec.higher_bad) for z in zh]
             flags_p = [self._flag(z, self.yellow_th, self.red_th, spec.higher_bad) for z in zp]
-            order = {"🔴": 3, "🟡": 2, "🟢": 1, "⚪": 0}
-            df[f"{spec.key}_燈號"] = [
-                max(a, b, key=lambda x: order[x]) for a, b in zip(flags_h, flags_p)
+            levels = [
+                a if LEVEL_RANK[a] >= LEVEL_RANK[b] else b
+                for a, b in zip(flags_h, flags_p)
             ]
+            df[f"{spec.key}_等級"] = levels
+            df[f"{spec.key}_等級分數"] = [LEVEL_RANK[x] for x in levels]
 
-        # 法遵風險指數：各指標燈號 × 面向權重 加總，再正規化到 0~100
-        light_points = {"🔴": 2.0, "🟡": 1.0, "🟢": 0.0, "⚪": 0.0}
+        # 法遵風險指數：各指標等級點數 × 面向權重 加總，再正規化到 0~100
         max_possible = sum(2.0 * self.weights.get(s.面向, 1.0) for s in self.indicators)
 
         def row_index(row) -> float:
             total = 0.0
             for spec in self.indicators:
-                flag = row.get(f"{spec.key}_燈號", "⚪")
-                total += light_points.get(flag, 0.0) * self.weights.get(spec.面向, 1.0)
+                level = row.get(f"{spec.key}_等級", LEVEL_NA)
+                total += LEVEL_POINTS.get(level, 0.0) * self.weights.get(spec.面向, 1.0)
             return round(100 * total / max_possible, 1) if max_possible else np.nan
 
         df["法遵風險指數"] = df.apply(row_index, axis=1)
 
-        def overall_light(idx: float) -> str:
+        def overall_level(idx: float) -> str:
             if pd.isna(idx):
-                return "⚪"
+                return LEVEL_NA
             if idx >= 50:
-                return "🔴 高風險"
+                return "高風險"
             if idx >= 25:
-                return "🟡 中風險"
-            return "🟢 低風險"
+                return "中風險"
+            return "低風險"
 
-        df["風險燈號"] = df["法遵風險指數"].apply(overall_light)
+        df["整體風險等級"] = df["法遵風險指數"].apply(overall_level)
 
         # ---- 維度三：事件前後回溯 ----
         if event_year is not None:
@@ -492,17 +503,17 @@ class KindergartenRiskScoringEngine:
         return df
 
     def _event_time_travel(self, df: pd.DataFrame, event_year: int, lookback: int) -> pd.DataFrame:
-        """標記事件前 1~lookback 年已亮紅/黃燈的指標（Pre-Event 預警回溯）。"""
+        """標記事件前 1~lookback 年已達 RED/YELLOW 的指標（Pre-Event 預警回溯）。"""
         pre_years = list(range(event_year - lookback, event_year))
         pre = df[df["年份"].isin(pre_years)].copy()
         warn = {}
         for (kid), g in pre.groupby("幼兒園ID"):
             hits = []
             for spec in self.indicators:
-                col = f"{spec.key}_燈號"
-                if col in g and (g[col].isin(["🔴", "🟡"]).any()):
-                    worst = "🔴" if (g[col] == "🔴").any() else "🟡"
-                    hits.append(f"{worst}{spec.key}")
+                col = f"{spec.key}_等級"
+                if col in g and (g[col].isin([LEVEL_RED, LEVEL_YELLOW]).any()):
+                    worst = LEVEL_RED if (g[col] == LEVEL_RED).any() else LEVEL_YELLOW
+                    hits.append(f"{spec.key}({worst})")
             warn[kid] = "、".join(hits) if hits else "（事件前無預警）"
         df["事件前預警"] = df["幼兒園ID"].map(warn)
         df["事件年份"] = event_year
@@ -643,7 +654,7 @@ def _demo():
     print("法遵風險評分結果（各園各年）")
     print("=" * 90)
     show = ["幼兒園ID", "年份", "每生人事費", "師生比", "加班費負荷",
-            "法遵風險指數", "風險燈號"]
+            "法遵風險指數", "整體風險等級"]
     show = [c for c in show if c in result.columns]
     view = result[show].copy()
     if "每生人事費" in view:
@@ -655,21 +666,21 @@ def _demo():
     print(view.to_string(index=False))
 
     print("\n" + "=" * 90)
-    print("113 年各園燈號明細與事件前預警（事件年份=113，回溯前 2 年 111-112）")
+    print("113 年各園異常等級明細與事件前預警（事件年份=113，回溯前 2 年 111-112）")
     print("=" * 90)
     y113 = result[result["年份"] == 113]
-    light_cols = [c for c in result.columns if c.endswith("_燈號")]
+    level_cols = [c for c in result.columns if c.endswith("_等級")]
     for _, r in y113.iterrows():
-        print(f"\n【{r['幼兒園ID']}】 風險指數 {r['法遵風險指數']} → {r['風險燈號']}")
-        lit = [f"{c.replace('_燈號','')}:{r[c]}" for c in light_cols if r[c] in ("🔴", "🟡")]
-        print("  亮燈指標：" + ("、".join(lit) if lit else "無"))
+        print(f"\n【{r['幼兒園ID']}】 風險指數 {r['法遵風險指數']} → {r['整體風險等級']}")
+        lit = [f"{c.replace('_等級','')}:{r[c]}" for c in level_cols if r[c] in (LEVEL_RED, LEVEL_YELLOW)]
+        print("  異常指標：" + ("、".join(lit) if lit else "無"))
         if "事件前預警" in r:
             print(f"  事件前預警：{r['事件前預警']}")
 
     print("\n" + "=" * 90)
     print("最終 DataFrame 欄位（可輸出 CSV 供平台使用）")
     print("=" * 90)
-    key_cols = ["幼兒園ID", "年份"] + [c for c in result.columns if c.endswith(("_歷年z", "_同業z", "_燈號"))]
+    key_cols = ["幼兒園ID", "年份"] + [c for c in result.columns if c.endswith(("_歷年z", "_同業z", "_等級", "_等級分數"))]
     print("欄位數：", len(result.columns))
     print("關鍵欄位：", key_cols[:12], "...")
     return result
