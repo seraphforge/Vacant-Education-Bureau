@@ -108,17 +108,34 @@ def num(value):
         return None
 
 
+# CSV 的風險方向代碼（`{指標}_風險方向` 欄，多個方向用 + 串接，例如 HIGH+SHIFT）。
+# 「正常」與「無資料」不是方向，解析後會是空 list，顯示文字由 aws/src/finance.py 決定。
+DIRECTION_CODES = ("HIGH", "LOW", "SHIFT")
+
+
+def parse_directions(raw):
+    """'HIGH+SHIFT' -> ['HIGH', 'SHIFT']；'正常' / '無資料' / 空值 -> []。"""
+    if not raw:
+        return []
+    return [c for c in str(raw).strip().split("+") if c in DIRECTION_CODES]
+
+
 def build_indicators(row):
     out = []
     for key, label, prefix in INDICATORS:
         level = (row.get(f"{prefix}_等級") or "").strip() or "N/A"
         score = num(row.get(f"{prefix}_等級分數"))
+        raw_direction = (row.get(f"{prefix}_風險方向") or "").strip()
         out.append(
             {
                 "key": key,
                 "label": label,
                 "level": level,
                 "levelScore": int(score) if score is not None else 0,
+                # 同一個等級可能來自不同方向的異常（過高／過低／突然變化），
+                # 原字串一併留著方便對帳，中文顯示文字由後端 finance.py 定案。
+                "direction": raw_direction or None,
+                "directions": parse_directions(raw_direction),
                 "yearZ": _round(num(row.get(f"{prefix}_歷年z"))),
                 "peerZ": _round(num(row.get(f"{prefix}_同業z"))),
             }
@@ -194,7 +211,7 @@ def main():
             )
             matched.append(record)
             flagged = [
-                f"{i['label']}({i['level']}/{i['levelScore']})"
+                f"{i['label']}({i['level']}/{i['direction'] or '-'})"
                 for i in build_indicators(row)
                 if i["levelScore"] >= 2
             ]

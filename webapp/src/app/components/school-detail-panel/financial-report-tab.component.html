@@ -18,18 +18,34 @@
         換算方式：{{ d.scoreFormula }}，以權重 {{ d.riskWeight }} 計入綜合風險指數的「財務法遵」維度。
       </p>
 
-      <!-- 有風險的指標一眼看到 -->
+      <!-- 有風險的指標一眼看到：名稱 + 方向（過高／過低／異常變化），顏色代表等級 -->
       @if (flagged().length) {
         <section class="fin__flagged">
           <h4><i class="pi pi-exclamation-triangle"></i> 需注意的指標（{{ flagged().length }} 項）</h4>
           <div class="fin__tags">
             @for (i of flagged(); track i.key) {
-              <p-tag
-                [value]="i.label + '（' + levelText(i) + '）'"
-                [severity]="levelSeverity(i)"
-              ></p-tag>
+              <p-tag [severity]="levelSeverity(i)">
+                <span class="fin__flag">
+                  @for (d of i.directions; track d.code) {
+                    <i [class]="directionIcon(d)" aria-hidden="true"></i>
+                  }
+                  {{ flaggedText(i) }}
+                  <small>{{ i.levelLabel }}</small>
+                </span>
+              </p-tag>
             }
           </div>
+          @if (usedDirections().length) {
+            <ul class="fin__legend">
+              @for (d of usedDirections(); track d.code) {
+                <li>
+                  <i [class]="directionIcon(d)" aria-hidden="true"></i>
+                  <strong>{{ d.label }}</strong>
+                  <span>{{ d.hint }}</span>
+                </li>
+              }
+            </ul>
+          }
         </section>
       } @else {
         <p class="fin__ok">
@@ -37,7 +53,7 @@
         </p>
       }
 
-      <!-- 八項指標的等級 -->
+      <!-- 八項指標的等級與風險方向 -->
       <section class="fin__group">
         <h4>財務風險指標等級</h4>
         <p-table
@@ -49,6 +65,7 @@
             <tr>
               <th scope="col">指標</th>
               <th scope="col" class="fin__col-level">等級</th>
+              <th scope="col" class="fin__col-dir">風險方向</th>
               <th scope="col" class="fin__col-z">歷年 z</th>
               <th scope="col" class="fin__col-z">同業 z</th>
             </tr>
@@ -57,14 +74,31 @@
             <tr [class.fin__row-muted]="i.levelScore === 0">
               <td>{{ i.label }}</td>
               <td><p-tag [value]="levelText(i)" [severity]="levelSeverity(i)"></p-tag></td>
+              <td>
+                @if (i.directions.length) {
+                  <div class="fin__dirs">
+                    @for (d of i.directions; track d.code) {
+                      <span class="fin__dir" [attr.data-dir]="d.code" [title]="d.hint">
+                        <i [class]="directionIcon(d)" aria-hidden="true"></i>
+                        {{ d.label }}
+                      </span>
+                    }
+                  </div>
+                } @else {
+                  <span class="fin__muted">{{ i.directionLabel }}</span>
+                }
+              </td>
               <td>{{ z(i.yearZ) }}</td>
               <td>{{ z(i.peerZ) }}</td>
             </tr>
           </ng-template>
         </p-table>
         <p class="fin__hint">
-          等級 1 正常、2 注意、3 警示；z 分數為與自身歷年（歷年 z）及同業（同業 z）比較的標準分數，
-          數值越大代表偏離越多。標示「無資料」是決算書缺該項所需欄位。
+          等級 1 正常、2 注意、3 警示，代表「有多異常」；風險方向代表「往哪個方向異常」——
+          <strong>過高</strong>高於正常範圍、<strong>過低</strong>低於正常範圍、
+          <strong>異常變化</strong>相對自身歷史突然改變（不分升降），可能同時出現多個方向。
+          z 分數為與自身歷年（歷年 z）及同業（同業 z）比較的標準分數，數值越大代表偏離越多。
+          標示「無資料」是決算書缺該項所需欄位。
         </p>
       </section>
 

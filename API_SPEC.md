@@ -559,12 +559,25 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
   "riskScore": 100.0,             // 進雷達圖 finance 軸的分數（指數 × 4，上限 100）
   "riskWeight": 0.75,
   "scoreFormula": "法遵風險指數 × 4（上限 100）",
+  // 風險方向圖例（過高／過低／異常變化）。文字與圖示由後端定案，前端直接顯示
+  "directionLegend": [
+    { "code": "HIGH",  "label": "過高",     "icon": "pi-arrow-up",   "hint": "高於正常範圍（與自身歷年或同業相比偏高）" },
+    { "code": "LOW",   "label": "過低",     "icon": "pi-arrow-down", "hint": "低於正常範圍（與自身歷年或同業相比偏低）" },
+    { "code": "SHIFT", "label": "異常變化", "icon": "pi-bolt",       "hint": "相對自身歷史突然變化（不分往上或往下）" }
+  ],
   "indicators": [                  // 固定 8 項，順序固定
     { "key": "per_student_personnel", "label": "每生人事費",
       "level": "RED",              // GREEN / YELLOW / RED / N/A
       "levelScore": 3,             // 0 無資料 / 1 正常 / 2 注意 / 3 警示
       "levelLabel": "警示",
-      "yearZ": 3.385, "peerZ": -1.023 }
+      // 風險方向：等級說「有多異常」，方向說「往哪個方向異常」。可能同時多個
+      "directions": [
+        { "code": "HIGH",  "label": "過高",     "icon": "pi-arrow-up", "hint": "…" },
+        { "code": "SHIFT", "label": "異常變化", "icon": "pi-bolt",     "hint": "…" }
+      ],
+      "directionLabel": "過高、異常變化",   // 一格顯示用；正常／無資料時就是「正常」／「無資料」
+      "directionCode": "HIGH+SHIFT",        // 原始代碼，對帳 CSV 用
+      "yearZ": 2.647, "peerZ": -0.056 }
     // …人事費年增率、預決算偏離率、經費流用比例、師生比、教職員流動率、加班費負荷、不當管教事件
   ],
   "flagged": [ /* indicators 裡 levelScore >= 2 的子集，前端不用自己過濾 */ ],
@@ -582,7 +595,9 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
 }
 ```
 
-`hasData: false` 時只會有 `kindergartenId`／`schoolName`／`hasData`／`disclaimer`／`scoreFormula`／`indicators: []`。
+`hasData: false` 時只會有 `kindergartenId`／`schoolName`／`hasData`／`disclaimer`／`scoreFormula`／`directionLegend`／`indicators: []`。
+
+**等級與方向是兩件事，UI 必須都顯示。** 等級（1/2/3）是「有多異常」，方向是「往哪個方向異常」：`每生人事費` 判成 `RED` 可能是花太多（`HIGH`）也可能是低到不合理（`LOW`），承辦人的處置完全不同。方向可以同時多個（`HIGH+SHIFT` = 既偏高又相對自身歷史突然跳升），`directions` 已經拆好成陣列，`directionLabel` 是可以直接放進表格一格的字串。
 
 錯誤：跨縣市或不存在一律 `404 KINDERGARTEN_NOT_FOUND`（與其他受保護端點一致，不洩漏存在性）。
 
@@ -870,6 +885,16 @@ export interface RiskAssessment {
 
 export type FinanceIndicatorLevel = 'GREEN' | 'YELLOW' | 'RED' | 'N/A';
 
+/** 風險方向：過高 / 過低 / 異常變化（等級說多異常，方向說往哪個方向異常） */
+export type FinanceDirectionCode = 'HIGH' | 'LOW' | 'SHIFT';
+
+export interface FinanceDirection {
+  code: FinanceDirectionCode;
+  label: string;          // 過高 / 過低 / 異常變化
+  icon: string | null;    // PrimeIcons class
+  hint: string | null;
+}
+
 export interface FinanceIndicator {
   key: string;
   label: string;
@@ -877,6 +902,11 @@ export interface FinanceIndicator {
   /** 0 無資料 / 1 正常 / 2 注意 / 3 警示 */
   levelScore: 0 | 1 | 2 | 3;
   levelLabel: string;
+  /** 可能多個；正常／無資料時是空陣列 */
+  directions: FinanceDirection[];
+  /** 「過高、異常變化」或「正常」／「無資料」 */
+  directionLabel: string;
+  directionCode?: string | null;
   yearZ: number | null;
   peerZ: number | null;
 }
@@ -887,6 +917,7 @@ export interface FinanceReport {
   hasData: boolean;
   disclaimer: string;
   scoreFormula: string;
+  directionLegend?: FinanceDirection[];
   indicators: FinanceIndicator[];
   fiscalYear?: string;
   complianceIndex?: number | null;

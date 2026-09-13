@@ -253,6 +253,21 @@ export interface RiskAssessment {
 /** 指標等級。GREEN/YELLOW/RED 對應 levelScore 1/2/3，N/A 對應 0（缺欄位） */
 export type FinanceIndicatorLevel = 'GREEN' | 'YELLOW' | 'RED' | 'N/A';
 
+/**
+ * 風險方向：等級只說「有多異常」，方向說「往哪個方向異常」。
+ * 同一個 RED 可能是花太多（HIGH）或低到不合理（LOW），處置方式不同。
+ */
+export type FinanceDirectionCode = 'HIGH' | 'LOW' | 'SHIFT';
+
+export interface FinanceDirection {
+  code: FinanceDirectionCode;
+  /** 過高 / 過低 / 異常變化（後端定案，前端不要自己翻） */
+  label: string;
+  /** PrimeIcons class，例如 pi-arrow-up */
+  icon: string | null;
+  hint: string | null;
+}
+
 export interface FinanceIndicator {
   key: string;
   label: string;
@@ -260,6 +275,12 @@ export interface FinanceIndicator {
   /** 0 = 無資料、1 = 正常、2 = 注意、3 = 警示 */
   levelScore: 0 | 1 | 2 | 3;
   levelLabel: string;
+  /** 可能有多個方向（例如既過高又異常變化）；正常／無資料時是空陣列 */
+  directions: FinanceDirection[];
+  /** 一格顯示用：「過高、異常變化」或「正常」／「無資料」 */
+  directionLabel: string;
+  /** 原始代碼，例如 'HIGH+SHIFT'（對帳用） */
+  directionCode?: string | null;
   /** 跟自己歷年比的 z 分數 */
   yearZ: number | null;
   /** 跟同業比的 z 分數 */
@@ -286,6 +307,8 @@ export interface FinanceReport {
   hasData: boolean;
   disclaimer: string;
   scoreFormula: string;
+  /** 風險方向圖例（過高／過低／異常變化），畫面上直接列出來當說明 */
+  directionLegend?: FinanceDirection[];
   indicators: FinanceIndicator[];
   financeId?: string | null;
   alias?: string | null;

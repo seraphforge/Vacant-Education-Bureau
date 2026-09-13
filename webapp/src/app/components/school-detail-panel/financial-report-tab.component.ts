@@ -4,7 +4,7 @@ import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
-import { FinanceIndicator, FinanceReport } from '../../models/report.model';
+import { FinanceDirection, FinanceIndicator, FinanceReport } from '../../models/report.model';
 import { SecureReportService } from '../../services/secure-report.service';
 
 /**
@@ -35,13 +35,34 @@ export class FinancialReportTabComponent {
   readonly loading = signal(false);
   readonly data = signal<FinanceReport | null>(null);
 
-  /** 有風險的指標（等級 2 注意 / 3 警示）排前面，其次正常，無資料排最後 */
+  /**
+   * 有風險的指標（等級 2 注意 / 3 警示）排前面，其次正常，無資料排最後。
+   * 同等級時「過高」排在「過低」之前，只有突變的排最後 —— 讓最需要看的排最上面。
+   */
   readonly sortedIndicators = computed(() => {
     const order = (i: FinanceIndicator) => (i.levelScore === 0 ? 9 : 4 - i.levelScore);
-    return [...(this.data()?.indicators ?? [])].sort((a, b) => order(a) - order(b));
+    const dirOrder = (i: FinanceIndicator) => {
+      const codes = i.directions.map((d) => d.code);
+      if (codes.includes('HIGH')) return 0;
+      if (codes.includes('LOW')) return 1;
+      if (codes.includes('SHIFT')) return 2;
+      return 3;
+    };
+    return [...(this.data()?.indicators ?? [])].sort(
+      (a, b) => order(a) - order(b) || dirOrder(a) - dirOrder(b),
+    );
   });
 
   readonly flagged = computed(() => this.data()?.flagged ?? []);
+
+  /** 只列出這間園實際出現過的方向，避免圖例講一堆用不到的 */
+  readonly usedDirections = computed(() => {
+    const used = new Set<string>();
+    (this.data()?.indicators ?? []).forEach((i) =>
+      i.directions.forEach((d) => used.add(d.code)),
+    );
+    return (this.data()?.directionLegend ?? []).filter((d) => used.has(d.code));
+  });
 
   /** 財務數字分組（在 component 算好，模板不要放 ?? 這類運算式） */
   readonly metricGroups = computed(() => this.data()?.metrics?.groups ?? []);
@@ -98,6 +119,19 @@ export class FinancialReportTabComponent {
   /** 「等級 2（注意）」這種顯示字串，把 CSV 的等級分數直接攤開給承辦人看 */
   levelText(i: FinanceIndicator): string {
     return i.levelScore === 0 ? '無資料' : `等級 ${i.levelScore}・${i.levelLabel}`;
+  }
+
+  /**
+   * 「需注意的指標」用的短標籤：指標名稱 + 風險方向。
+   * 等級用顏色表示（紅=警示、黃=注意），文字留給方向，才不會擠成一長串。
+   */
+  flaggedText(i: FinanceIndicator): string {
+    return `${i.label}｜${i.directionLabel}`;
+  }
+
+  /** 方向圖示；後端沒給就退回一個中性圖示 */
+  directionIcon(d: FinanceDirection): string {
+    return `pi ${d.icon || 'pi-info-circle'}`;
   }
 
   /** z 分數顯示：正值代表比基準高（越高越可能異常） */
