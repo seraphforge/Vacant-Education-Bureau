@@ -1,0 +1,118 @@
+@if (data(); as d) {
+  @if (d.hasData) {
+    <div class="fin">
+      <!-- 法遵風險指數 -->
+      <div class="fin__summary">
+        <div class="fin__score">
+          <span class="fin__score-num">{{ d.complianceIndex }}</span>
+          <span class="fin__score-cap">法遵風險指數（{{ d.fiscalYear }} 年度決算）</span>
+        </div>
+        <div class="fin__tags">
+          <p-tag [value]="'風險分數 ' + d.riskScore + ' / 100'" [severity]="indexSeverity()"></p-tag>
+          @if (d.overallLevel) {
+            <p-tag [value]="'整體 ' + d.overallLevel" [severity]="overallSeverity()"></p-tag>
+          }
+        </div>
+      </div>
+      <p class="fin__formula">
+        換算方式：{{ d.scoreFormula }}，以權重 {{ d.riskWeight }} 計入綜合風險指數的「財務法遵」維度。
+      </p>
+
+      <!-- 有風險的指標一眼看到 -->
+      @if (flagged().length) {
+        <section class="fin__flagged">
+          <h4><i class="pi pi-exclamation-triangle"></i> 需注意的指標（{{ flagged().length }} 項）</h4>
+          <div class="fin__tags">
+            @for (i of flagged(); track i.key) {
+              <p-tag
+                [value]="i.label + '（' + levelText(i) + '）'"
+                [severity]="levelSeverity(i)"
+              ></p-tag>
+            }
+          </div>
+        </section>
+      } @else {
+        <p class="fin__ok">
+          <i class="pi pi-check-circle"></i> 本年度沒有達到「注意」以上的財務指標。
+        </p>
+      }
+
+      <!-- 八項指標的等級 -->
+      <section class="fin__group">
+        <h4>財務風險指標等級</h4>
+        <p-table
+          [value]="sortedIndicators()"
+          styleClass="p-datatable-sm"
+          [tableStyle]="{ 'min-width': '100%' }"
+        >
+          <ng-template pTemplate="header">
+            <tr>
+              <th scope="col">指標</th>
+              <th scope="col" class="fin__col-level">等級</th>
+              <th scope="col" class="fin__col-z">歷年 z</th>
+              <th scope="col" class="fin__col-z">同業 z</th>
+            </tr>
+          </ng-template>
+          <ng-template pTemplate="body" let-i>
+            <tr [class.fin__row-muted]="i.levelScore === 0">
+              <td>{{ i.label }}</td>
+              <td><p-tag [value]="levelText(i)" [severity]="levelSeverity(i)"></p-tag></td>
+              <td>{{ z(i.yearZ) }}</td>
+              <td>{{ z(i.peerZ) }}</td>
+            </tr>
+          </ng-template>
+        </p-table>
+        <p class="fin__hint">
+          等級 1 正常、2 注意、3 警示；z 分數為與自身歷年（歷年 z）及同業（同業 z）比較的標準分數，
+          數值越大代表偏離越多。標示「無資料」是決算書缺該項所需欄位。
+        </p>
+      </section>
+
+      @if (d.earlyWarning) {
+        <p class="fin__warning"><strong>事件前預警：</strong>{{ d.earlyWarning }}</p>
+      }
+
+      <!-- 主要財務數字 -->
+      @for (g of metricGroups(); track g.label) {
+        <section class="fin__group">
+          <h4>{{ g.label }}</h4>
+          <div class="fin__metrics">
+            @for (m of g.items; track m.label) {
+              <div class="fin__metric">
+                <span class="fin__metric-label">{{ m.label }}</span>
+                <span class="fin__metric-value">
+                  @if (m.value === null) {
+                    —
+                  } @else {
+                    {{ m.value | number: '1.0-2' }}<small>{{ m.unit }}</small>
+                  }
+                </span>
+              </div>
+            }
+          </div>
+        </section>
+      }
+
+      <p class="fin__disclaimer">{{ d.disclaimer }}</p>
+      @if (d.updatedAt) {
+        <p class="fin__meta">資料更新：{{ d.updatedAt }}｜來源：{{ d.sourceFile }}</p>
+      }
+    </div>
+  } @else {
+    <div class="tab-empty">
+      <i class="pi pi-chart-bar"></i>
+      <h3>尚無決算書分析資料</h3>
+      <p>
+        這間園所目前沒有可分析的決算書。財報法遵指標需要公開決算書，
+        目前已完成 10 所非營利幼兒園的 113 年度分析。
+      </p>
+      <p>沒有資料不代表沒有風險，本維度不會計入綜合風險分數。</p>
+    </div>
+  }
+} @else if (loading()) {
+  <div class="fin__center">
+    <p-progressSpinner strokeWidth="4" [style]="{ width: '40px', height: '40px' }"></p-progressSpinner>
+  </div>
+} @else {
+  <p class="fin__empty">無法載入財報資料。</p>
+}

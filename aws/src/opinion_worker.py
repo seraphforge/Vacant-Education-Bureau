@@ -43,6 +43,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import risk
 from common import get_conn, utcnow
 
 # ---------------------------------------------------------------------------
@@ -961,44 +962,6 @@ def save_items(cur, job_id, kg_id, items):
         )
 
 
-def update_risk_dimension(cur, kg_id, score):
-    """把 opinion 分數寫回風險雷達圖的 opinion 軸，其他維度不動。
-
-    total_score / risk_level 故意不算：其他維度還是 placeholder，
-    算總分會給人「已完成評估」的錯覺。
-    """
-    cur.execute(
-        "SELECT dimensions FROM risk_score_current WHERE kindergarten_id = %s", (kg_id,)
-    )
-    row = cur.fetchone()
-    stored = row["dimensions"] if row else None
-    if isinstance(stored, str):
-        try:
-            stored = json.loads(stored)
-        except ValueError:
-            stored = None
-    dimensions = stored if isinstance(stored, list) else []
-
-    found = False
-    for dimension in dimensions:
-        if isinstance(dimension, dict) and dimension.get("key") == "opinion":
-            dimension["score"] = score
-            found = True
-    if not found:
-        dimensions.append(
-            {"key": "opinion", "label": "輿情負面", "score": score, "weight": 0.2}
-        )
-
-    cur.execute(
-        """INSERT INTO risk_score_current
-               (kindergarten_id, dimensions, is_placeholder, computed_at)
-           VALUES (%s, %s, 1, %s)
-           ON DUPLICATE KEY UPDATE
-               dimensions = VALUES(dimensions), computed_at = VALUES(computed_at)""",
-        (kg_id, json.dumps(dimensions, ensure_ascii=False), utcnow()),
-    )
-
-
 def build_summary(school, items, source_report, llm_summary, score):
     """組出給承辦人看的摘要。LLM 有給就用它，但來源狀態一律由程式附上。"""
     confirmed = [i for i in items if i["attribution"] == "confirmed"]
@@ -1108,7 +1071,6 @@ def handler(event, context):  # noqa: ARG001
 
         with conn.cursor() as cur:
             save_items(cur, job_id, school["id"], items)
-            update_risk_dimension(cur, school["id"], score)
             cur.execute(
                 """UPDATE opinion_scan_job SET
                        status='done', finished_at=%s, item_count=%s, confirmed_count=%s,
@@ -1128,6 +1090,9 @@ def handler(event, context):  # noqa: ARG001
                     job_id,
                 ),
             )
+            # 風險指數的 opinion 維度讀的是「最後一次 status='done' 的關注指數」，
+            # 所以一定要等上面那筆 UPDATE 之後才重算，順序不能顛倒。
+            risk.recompute(cur, school["id"])
             cur.execute(
                 """INSERT INTO opinion_scan_audit
                        (job_id, kindergarten_id, action, detail, created_at)

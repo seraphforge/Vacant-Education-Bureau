@@ -1,3 +1,9 @@
+.risk {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
 .risk__center {
   display: flex;
   justify-content: center;
@@ -7,8 +13,8 @@
 .risk__summary {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.25rem;
-  margin-bottom: 0.75rem;
 }
 
 .risk__score {
@@ -28,17 +34,9 @@
   color: var(--text-color-secondary);
 }
 
-.risk__note {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
+.risk__meta {
+  font-size: 0.8rem;
   color: var(--text-color-secondary);
-  margin: 0 0 1rem;
-
-  i {
-    color: var(--primary-color);
-  }
 }
 
 .risk__chart {
@@ -46,11 +44,50 @@
   position: relative;
 }
 
-.risk__missing {
-  font-size: 0.8rem;
+.risk__col-score {
+  width: 7rem;
+}
+
+.risk__col-weight {
+  width: 7rem;
+}
+
+.risk__note-cell {
+  font-size: 0.85rem;
   color: var(--text-color-secondary);
-  text-align: center;
-  margin: 0.75rem 0 0;
+}
+
+/* 不計分的維度整列淡化，避免被當成「0 分 = 沒問題」 */
+.risk__row-muted {
+  opacity: 0.6;
+}
+
+.risk__muted {
+  color: var(--text-color-secondary);
+}
+
+.risk__missing {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-color-secondary);
+  margin: 0;
+
+  i {
+    color: var(--primary-color);
+    margin-top: 0.15rem;
+  }
+}
+
+.risk__disclaimer {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--text-color-secondary);
+  border-left: 3px solid var(--surface-border);
+  padding-left: 0.6rem;
 }
 
 .risk__empty {

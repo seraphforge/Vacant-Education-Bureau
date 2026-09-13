@@ -13,6 +13,7 @@ import re
 import auth
 import mailer
 import reports
+import risk
 from common import error, iso, mask_email, respond, to_int, utcnow
 
 SORTABLE = {
@@ -372,6 +373,8 @@ def patch_report(cur, report_id, data, identity):
             mailer.send_reply_notice(
                 row["reporter_email"], reports.case_no(row), row["tracking_token"]
             )
+        # 結案 / 重啟調查都會改變「未結案回報」的件數，立刻重算風險指數
+        risk.recompute(cur, row["kindergarten_id"])
 
     row, err = _load_report(cur, report_id, county)
     if err:

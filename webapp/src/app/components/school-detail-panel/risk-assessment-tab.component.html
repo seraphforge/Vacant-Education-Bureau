@@ -3,7 +3,7 @@
     <div class="risk__summary">
       <div class="risk__score">
         <span class="risk__score-num">{{ displayTotal() }}</span>
-        <span class="risk__score-cap">綜合風險分數</span>
+        <span class="risk__score-cap">綜合風險分數（0–100）</span>
       </div>
       <p-tag
         [value]="levelLabel()"
@@ -17,14 +17,10 @@
                 : 'secondary'
         "
       ></p-tag>
+      @if (r.computedAt) {
+        <span class="risk__meta">計算時間：{{ r.computedAt }}（{{ r.modelVersion }}）</span>
+      }
     </div>
-
-    @if (r.isPlaceholder) {
-      <p class="risk__note">
-        <i class="pi pi-info-circle"></i>
-        目前為示範分數（模型版本：{{ r.modelVersion }}），實際評分整合中。
-      </p>
-    }
 
     <div class="risk__chart">
       @if (chartData(); as data) {
@@ -32,8 +28,43 @@
       }
     </div>
 
-    @if (hasMissingScore()) {
-      <p class="risk__missing">部分維度尚無資料，圖上以 0 表示。</p>
+    <!-- 各維度的分數、權重與依據，讓承辦人看得出總分是怎麼來的 -->
+    <p-table [value]="dimensions()" styleClass="p-datatable-sm" [tableStyle]="{ 'min-width': '100%' }">
+      <ng-template pTemplate="header">
+        <tr>
+          <th scope="col">維度</th>
+          <th scope="col" class="risk__col-score">分數</th>
+          <th scope="col" class="risk__col-weight">權重</th>
+          <th scope="col">依據</th>
+        </tr>
+      </ng-template>
+      <ng-template pTemplate="body" let-d>
+        <tr [class.risk__row-muted]="d.score === null">
+          <td>{{ d.label }}</td>
+          <td>
+            <p-tag [value]="dimScore(d)" [severity]="dimSeverity(d)"></p-tag>
+          </td>
+          <td>
+            {{ dimWeight(d) }}
+            @if (d.baseWeight !== undefined && d.weight !== d.baseWeight) {
+              <small class="risk__muted">（原 {{ d.baseWeight.toFixed(2) }}）</small>
+            }
+          </td>
+          <td class="risk__note-cell">{{ d.detail?.note || '—' }}</td>
+        </tr>
+      </ng-template>
+    </p-table>
+
+    @if (missingDimensions().length) {
+      <p class="risk__missing">
+        <i class="pi pi-info-circle"></i>
+        尚無資料的維度（{{ missingDimensions().length }} 項）不計分，其權重已平均分配給其他維度；
+        雷達圖上以 0 呈現，請勿解讀為「沒有風險」。
+      </p>
+    }
+
+    @if (r.disclaimer) {
+      <p class="risk__disclaimer">{{ r.disclaimer }}</p>
     }
   </div>
 } @else if (loading()) {

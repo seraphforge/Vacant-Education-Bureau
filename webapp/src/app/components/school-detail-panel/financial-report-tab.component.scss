@@ -1,0 +1,152 @@
+/* 財報 Tab。空狀態樣式來自 tab-empty.scss（一起掛在 styleUrls）。 */
+.fin {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.fin__center {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 0;
+}
+
+.fin__summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+
+.fin__score {
+  display: flex;
+  flex-direction: column;
+}
+
+.fin__score-num {
+  font-size: 2.4rem;
+  font-weight: 800;
+  line-height: 1;
+  color: #7c3aed;
+}
+
+.fin__score-cap {
+  font-size: 0.85rem;
+  color: var(--text-color-secondary);
+}
+
+.fin__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.fin__formula,
+.fin__hint,
+.fin__meta {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-color-secondary);
+}
+
+.fin__flagged {
+  border: 1px solid var(--surface-border);
+  border-left: 4px solid var(--red-500, #ef4444);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  background: var(--surface-50);
+
+  h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+}
+
+.fin__ok {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-color-secondary);
+
+  i {
+    color: var(--green-500, #22c55e);
+  }
+}
+
+.fin__group {
+  h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+  }
+}
+
+.fin__col-level {
+  width: 10rem;
+}
+
+.fin__col-z {
+  width: 6rem;
+}
+
+.fin__row-muted {
+  opacity: 0.55;
+}
+
+.fin__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.5rem;
+}
+
+.fin__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+}
+
+.fin__metric-label {
+  font-size: 0.75rem;
+  color: var(--text-color-secondary);
+}
+
+.fin__metric-value {
+  font-size: 1rem;
+  font-weight: 600;
+
+  small {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--text-color-secondary);
+    margin-left: 0.15rem;
+  }
+}
+
+.fin__warning {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.fin__disclaimer {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--text-color-secondary);
+  border-left: 3px solid var(--surface-border);
+  padding-left: 0.6rem;
+}
+
+.fin__empty {
+  color: var(--text-color-secondary);
+  text-align: center;
+  padding: 2rem 0;
+}

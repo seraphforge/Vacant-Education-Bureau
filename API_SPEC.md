@@ -1,4 +1,4 @@
-# API_SPEC.md — README!!! 平臺後端 API 契約
+﻿# API_SPEC.md — README!!! 平臺後端 API 契約
 
 > 給前端開發用的 API 契約。搭配 [`UI_SPEC.md`](UI_SPEC.md) 閱讀。
 > **實作狀態**：本文件中標記 `已上線` 的端點現在就能打；標記 `規劃中` 的是後端正在實作的契約，
@@ -497,36 +497,103 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
 
 ### 4.8 GET `/api/secure/kindergartens/{id}/risk` — 風險評估 Tab
 
-**目前是 placeholder**：`isPlaceholder: true`，`totalScore` 與各維度 `score` 可能為 `null`。維度的 `key`／`label` 已定案，之後只會換掉分數。
+**正式演算法（`modelVersion: "risk-v1"`，實作在 `aws/src/risk.py`）。** 四個維度各自 0–100 分，總分是加權平均，`isPlaceholder` 一律 `false`（欄位保留只為相容）。
+
+| `key` | `label` | 原始權重 | 分數規則 |
+|---|---|---|---|
+| `finance` | 財務法遵 | 0.75 | 財報「法遵風險指數」× 4，上限 100（見 §4.9） |
+| `parent_report` | 家長回報 | 1.00 | 尚有未結案回報（`submitted`／`investigating`）= 100，否則 0 |
+| `opinion` | 輿情關注 | 0.50 | 最近一次輿情掃描的「關注指數」× 2.5，上限 100 |
+| `compliance` | 裁罰紀錄 | 0.75 | 罰鍰總額 > 100,000 = 100；有紀錄但未達 = 50；無紀錄 = 0 |
+
+`totalScore = Σ(score × weight) ÷ 3.0`（四個權重之和），上限 100。
+
+**缺資料的維度 `score` 是 `null`、不計分，它的權重會平均分配給其他維度**，所以回傳的 `weight` 是**有效權重**（`baseWeight` 才是原始權重）。例如財報與輿情都沒有資料時，1.25 的權重會平均加到家長回報（1.625）與裁罰紀錄（1.375）。
+
+每次呼叫都會即時重算並寫回 `risk_score_current`，所以清單頁（§4.2 的 `risk_score`）與這支永遠一致。家長回報成案／狀態變更、輿情掃描完成時後端也會自動重算。
 
 ```jsonc
 {
-  "kindergartenId": 1234,
-  "totalScore": 83.5,          // number | null
-  "riskLevel": "high",         // "high" | "medium" | "normal" | null
-  "isPlaceholder": true,
-  "modelVersion": "placeholder-v0",
-  "computedAt": "2026-09-12T00:00:00Z",   // 可能為 null
+  "kindergartenId": 67918,
+  "schoolName": "新北市鷺江非營利幼兒園(委託財團法人彭婉如文教基金會辦理)",
+  "totalScore": 30.56,         // number | null（四個維度全無資料才會是 null）
+  "riskLevel": "normal",       // "high"(>=65) | "medium"(>=45) | "normal" | null
+  "isPlaceholder": false,
+  "modelVersion": "risk-v1",
+  "computedAt": "2026-09-13T02:36:39Z",
   "dimensions": [
-    { "key": "finance",       "label": "財務異常",   "score": 88, "weight": 0.3 },
-    { "key": "compliance",    "label": "裁罰紀錄",   "score": 92, "weight": 0.3 },
-    { "key": "opinion",       "label": "輿情負面",   "score": 70, "weight": 0.2 },
-    { "key": "parent_report", "label": "家長回報",   "score": 65, "weight": 0.1 },
-    { "key": "data_quality",  "label": "資料完整度", "score": 40, "weight": 0.1 }
-  ]
+    { "key": "finance", "label": "財務法遵", "score": 100.0, "weight": 0.9167, "baseWeight": 0.75,
+      "detail": { "complianceIndex": 31.2, "fiscalYear": "113", "overallLevel": "中風險",
+                  "note": "法遵風險指數 × 4" } },
+    { "key": "parent_report", "label": "家長回報", "score": 0.0, "weight": 1.1667, "baseWeight": 1.0,
+      "detail": { "openCount": 0, "totalCount": 0, "note": "目前沒有未結案回報" } },
+    { "key": "opinion", "label": "輿情關注", "score": null, "weight": 0.0, "baseWeight": 0.5,
+      "detail": { "attentionScore": null, "scannedAt": null,
+                  "note": "尚未執行輿情分析，本維度不計分" } },
+    { "key": "compliance", "label": "裁罰紀錄", "score": 0.0, "weight": 0.9167, "baseWeight": 0.75,
+      "detail": { "recordCount": 0, "totalFine": 0, "note": "查無裁罰紀錄" } }
+  ],
+  "disclaimer": "風險指數是「需要優先關注的程度」…"
 }
 ```
 
-雷達圖直接用 `dimensions` 的 `label` 當軸、`score`（0–100）當值。`score` 為 `null` 時建議畫 0 並加註「尚無資料」。
+雷達圖直接用 `dimensions` 的 `label` 當軸、`score`（0–100）當值。`score` 為 `null` 時畫 0，但**必須另外標示「尚無資料、不計分」**，不能讓使用者誤讀成「沒問題」。`detail.note` 是後端給的依據說明，直接顯示。
 
-### 4.9 輿情分析（政府端一鍵啟動，非同步）
+### 4.9 GET `/api/secure/kindergartens/{id}/finance` — 財報 Tab
+
+財報法遵分析（`aws/src/finance.py`）。資料來源是決算書 PDF 的清理與指標計算產出（`data/finance_pdf_cleaning/`），由 `tools/load_finance_risk.py` 載進 `finance_report_current`，**只取最新決算年度 113**。
+
+目前只有 10 所非營利幼兒園有決算書可分析，其餘回 `hasData: false`（**不是 0 分**）。
+
+```jsonc
+{
+  "kindergartenId": 67918,
+  "schoolName": "新北市鷺江非營利幼兒園(委託財團法人彭婉如文教基金會辦理)",
+  "hasData": true,
+  "fiscalYear": "113",
+  "financeId": "N08",
+  "alias": "鷺江",
+  "complianceIndex": 31.2,        // 法遵風險指數
+  "overallLevel": "中風險",        // 低風險 / 中風險 / 高風險
+  "earlyWarning": "師生比(YELLOW)",
+  "riskScore": 100.0,             // 進雷達圖 finance 軸的分數（指數 × 4，上限 100）
+  "riskWeight": 0.75,
+  "scoreFormula": "法遵風險指數 × 4（上限 100）",
+  "indicators": [                  // 固定 8 項，順序固定
+    { "key": "per_student_personnel", "label": "每生人事費",
+      "level": "RED",              // GREEN / YELLOW / RED / N/A
+      "levelScore": 3,             // 0 無資料 / 1 正常 / 2 注意 / 3 警示
+      "levelLabel": "警示",
+      "yearZ": 3.385, "peerZ": -1.023 }
+    // …人事費年增率、預決算偏離率、經費流用比例、師生比、教職員流動率、加班費負荷、不當管教事件
+  ],
+  "flagged": [ /* indicators 裡 levelScore >= 2 的子集，前端不用自己過濾 */ ],
+  "metrics": {                     // 主要財務數字，分組後直接渲染
+    "groups": [
+      { "label": "收支與餘絀", "items": [
+          { "label": "收入合計（決算）", "value": 15523274, "unit": "元" },
+          { "label": "收支餘絀率", "value": -4.93, "unit": "%" }
+      ] }
+    ]
+  },
+  "sourceFile": "risk_scores.csv",
+  "updatedAt": "2026-09-13T02:31:00Z",
+  "disclaimer": "財報指標由決算書公開資料自動計算…"
+}
+```
+
+`hasData: false` 時只會有 `kindergartenId`／`schoolName`／`hasData`／`disclaimer`／`scoreFormula`／`indicators: []`。
+
+錯誤：跨縣市或不存在一律 `404 KINDERGARTEN_NOT_FOUND`（與其他受保護端點一致，不洩漏存在性）。
+
+### 4.10 輿情分析（政府端一鍵啟動，非同步）
 
 分析要跑數十秒到數分鐘，超過 API Gateway 的 29 秒上限，所以是 **job 模式**：
 `POST` 建立工作 → API Lambda 非同步 invoke worker Lambda → 前端輪詢進度。
 
 實作：`aws/src/opinion.py`（API）、`aws/src/opinion_worker.py`（分析）、`db/migrations/004_opinion.sql`。
 
-#### 4.9.1 `GET /api/secure/kindergartens/{id}/opinion`
+#### 4.10.1 `GET /api/secure/kindergartens/{id}/opinion`
 
 開 Tab 時呼叫，回最後一次**成功完成**的結果。從沒掃過回 `hasData: false`。
 
@@ -547,7 +614,7 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
 }
 ```
 
-#### 4.9.2 `POST /api/secure/kindergartens/{id}/opinion/scans`
+#### 4.10.2 `POST /api/secure/kindergartens/{id}/opinion/scans`
 
 沒有 request body。回應：
 
@@ -559,7 +626,7 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
 | `404` | 幼兒園不存在，**或不在這個帳號的縣市權限內**（故意不區分，避免洩漏存在性） |
 | `500` | 無法喚醒 worker；job 會被標成 `failed` 並附 `error` |
 
-#### 4.9.3 `GET /api/secure/kindergartens/{id}/opinion/scans/{jobId}`
+#### 4.10.3 `GET /api/secure/kindergartens/{id}/opinion/scans/{jobId}`
 
 輪詢用（前端每 4 秒一次）。`status` 為 `done` 時 `items` 會一起回來。
 
@@ -586,7 +653,7 @@ Response `200`：回傳**與 §4.5 完全相同的詳情物件**（前端可直�
 }
 ```
 
-#### 4.9.4 `items[]`
+#### 4.10.4 `items[]`
 
 UI_SPEC Tab 3 要求的欄位是「文字內容 / 來源 / 日期」，這裡另外提供情緒與風險標籤。
 
@@ -619,11 +686,11 @@ UI_SPEC Tab 3 要求的欄位是「文字內容 / 來源 / 日期」，這裡另
 - 只有 `attribution = confirmed` 的項目會計入 `opinionScore`；沒有任何可歸屬線索時分數是 `0`（查過而且沒查到，本身是有意義的資訊），不是 `null`。
 - **`opinionScore` 按「問題類型」計，不按「報導篇數」計。** 每種風險標籤只計一次（取權重最高的那一筆），所以同一個事件被 10 家媒體報導不會讓分數變成 10 倍。`itemCount` 會如實反映筆數，兩者不要互推。
 - 官方可核對的紀錄（`verified: true`）用完整權重，不受情緒分數折扣——裁罰處分書是公文腔，`sentiment` 常常是 `NEUTRAL`，但「被罰了」跟語氣無關。
-- 完成後 worker 會把分數寫回 `risk_score_current` 的 `opinion` 維度（§4.8 的雷達圖會跟著亮），但**不會**去算 `totalScore`——其他維度還是 placeholder，算總分會給人「已完成評估」的錯覺。
+- 完成後 worker 會呼叫 `risk.recompute()` 重算整份風險指數（§4.8），所以掃描一結束，雷達圖的 `opinion` 軸與總分、清單頁的風險欄位都會一起更新。掃描前該維度是 `score: null`（缺資料不計分），不是 0 分。
 
-### 4.10 尚未提供
+### 4.11 已全部提供
 
-**財報 Tab（UI_SPEC 6.3 Tab 2）的 API 還沒定案**，欄位仍在討論中。這個 Tab 請先做出殼（Tab 標題 + 空狀態提示「資料整合中」），不要先自訂欄位，避免之後對不上。
+政府端四個 Tab 的 API 都已上線：風險評估（§4.8）、裁罰紀錄（§1）、財報（§4.9）、輿情分析（§4.10）。沒有仍在 mock 的端點。
 
 ---
 
@@ -642,7 +709,9 @@ UI_SPEC Tab 3 要求的欄位是「文字內容 / 來源 / 日期」，這裡另
 
 ### 5.2 風險等級
 
-`high`（≥80，紫）、`medium`（60–79，紅）、`normal`（<60，預設）、`null`（未計算，預設）。
+`high`（≥65，紫）、`medium`（45–64，紅）、`normal`（<45，預設）、`null`（未計算，預設）。
+
+閾值定在後端（`aws/src/risk.py` 的 `HIGH_THRESHOLD` / `MEDIUM_THRESHOLD`），前端只依 `riskLevel` 上色，之後調整閾值不用改前端。
 
 ### 5.3 錯誤碼
 
@@ -775,14 +844,60 @@ export interface ReportDetail {
   }[];
   messages: ReportMessage[];
 }
+export interface RiskDimension {
+  key: 'finance' | 'parent_report' | 'opinion' | 'compliance' | string;
+  label: string;
+  /** null = 這個維度沒有資料、不計分（畫面要標示，不要當 0 分） */
+  score: number | null;
+  /** 有效權重（缺資料維度的權重已被平均分配進來） */
+  weight: number;
+  baseWeight?: number;
+  detail?: Record<string, unknown> & { note?: string };
+}
+
 export interface RiskAssessment {
   kindergartenId: number;
+  schoolName?: string;
   totalScore: number | null;
   riskLevel: RiskLevel | null;
+  /** 正式演算法上線後一律 false */
   isPlaceholder: boolean;
   modelVersion: string | null;
   computedAt: string | null;
-  dimensions: { key: string; label: string; score: number | null; weight: number }[];
+  dimensions: RiskDimension[];
+  disclaimer?: string;
+}
+
+export type FinanceIndicatorLevel = 'GREEN' | 'YELLOW' | 'RED' | 'N/A';
+
+export interface FinanceIndicator {
+  key: string;
+  label: string;
+  level: FinanceIndicatorLevel;
+  /** 0 無資料 / 1 正常 / 2 注意 / 3 警示 */
+  levelScore: 0 | 1 | 2 | 3;
+  levelLabel: string;
+  yearZ: number | null;
+  peerZ: number | null;
+}
+
+export interface FinanceReport {
+  kindergartenId: number;
+  schoolName: string;
+  hasData: boolean;
+  disclaimer: string;
+  scoreFormula: string;
+  indicators: FinanceIndicator[];
+  fiscalYear?: string;
+  complianceIndex?: number | null;
+  overallLevel?: string | null;
+  earlyWarning?: string | null;
+  riskScore?: number | null;
+  riskWeight?: number;
+  flagged?: FinanceIndicator[];
+  metrics?: { groups: { label: string; items: { label: string; value: number | null; unit: string }[] }[] };
+  sourceFile?: string | null;
+  updatedAt?: string | null;
 }
 ```
 

@@ -1,4 +1,4 @@
-# 後端（AWS Serverless）
+﻿# 後端（AWS Serverless）
 
 ## 這是什麼？
 
@@ -110,13 +110,14 @@ schema = readme                   S3（家長回報附件，presigned URL 直傳
 | `src/reports_admin.py` | 家長回報（政府端：清單／詳情／回覆／狀態變更） |
 | `src/mailer.py` | 寄信（SES v2，含不寄信的 dev mode） |
 | `src/storage.py` | 附件的 S3 presigned URL |
-| `src/risk.py` | 風險指數（目前是 placeholder） |
+| `src/risk.py` | 風險指數（四維度加權：財務法遵／家長回報／輿情關注／裁罰紀錄） |
+| `src/finance.py` | 財報法遵分析（法遵風險指數 + 八項指標等級） |
 | `src/opinion.py` | 輿情分析 job API（啟動掃描／查進度／查最新結果） |
 | `src/opinion_worker.py` | 輿情分析 worker（多來源蒐集 + Bedrock 判讀 + Comprehend 情緒） |
 | `src/requirements.txt` | Lambda 依賴（只有 PyMySQL；boto3 是 runtime 內建） |
 | `build_zip.py` | 把 `build/` 打包成 `lambda.zip` |
 | `local_test.py` | 本機測試幼兒園／裁罰端點（開 SSH tunnel 連 RDS，不用部署） |
-| `local_test_reports.py` | 本機測試家長回報全流程（63 項檢查） |
+| `local_test_reports.py` | 本機測試家長回報全流程 + 風險 / 財報（84 項檢查） |
 | `local_test_opinion.py` | 本機測試輿情 worker（`--live` 會連真的來源與 Bedrock／Comprehend） |
 | `deploy.ps1` | 一鍵部署**後端** |
 | `deploy-web.ps1` | 一鍵部署**前端**（build + 上傳 + 清快取） |
@@ -133,7 +134,8 @@ schema = readme                   S3（家長回報附件，presigned URL 直傳
 | `db/migrations/*.sql` | 資料表 DDL，照檔名順序套用 |
 | `tools/migrate.py` | 跑 migration（同樣走 bastion SSH tunnel） |
 | `tools/opinion_e2e.py` | 輿情分析端到端測試（真 worker + 真 RDS + 真 Bedrock，不用部署） |
-| `tools/seed_risk_placeholder.py` | 灌風險指數的假分數，給前端開發用 |
+| `tools/load_finance_risk.py` | 載入財報法遵分析 CSV（只取 113 年度）並重算該校風險 |
+| `tools/recompute_risk.py` | 全量重算風險指數，並清掉舊的 placeholder 假分數 |
 | `tools/cleanup_test_reports.py` | 刪掉測試用的家長回報資料 |
 
 兩個 stack 是分開的，前端重新部署不會動到 API：
@@ -249,7 +251,8 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
 | GET | `/api/secure/reports/{id}` | **要** | 案件詳情（含附件與訊息串） |
 | POST | `/api/secure/reports/{id}/messages` | **要** | 回覆家長 / 內部備註 |
 | PATCH | `/api/secure/reports/{id}` | **要** | 變更狀態 / 指派承辦 |
-| GET | `/api/secure/kindergartens/{id}/risk` | **要** | 風險評估（placeholder） |
+| GET | `/api/secure/kindergartens/{id}/risk` | **要** | 風險評估（四維度加權，讀取時即時重算） |
+| GET | `/api/secure/kindergartens/{id}/finance` | **要** | 財報法遵分析（113 決算年度） |
 
 > 完整的 request / response 欄位、錯誤碼與 TypeScript 型別在
 > 專案根目錄的 [`API_SPEC.md`](../API_SPEC.md)，前端請以那份為準。
@@ -372,6 +375,9 @@ Base URL：部署完成後由 `deploy.ps1` 印出（目前為
   `parent_report_message`、`staff_profile`、`risk_score_current`）由
   `db/migrations/*.sql` 定義，用 `python tools/migrate.py` 套用，
   已套用的版本記在 `schema_migration` 表。詳見下面「家長回報系統」。
+- **財報法遵分析放在 `finance_report_current`**（`005_finance_risk.sql`），
+  一校一列、只存最新決算年度（113）。來源是決算書 PDF 的清理產出，
+  用 `python tools/load_finance_risk.py` 載入。詳見下面「財報法遵分析」。
 
 ## 家長回報系統
 
@@ -403,7 +409,7 @@ GET /api/reports/{token} ◄─────────────────�
 | `parent_report_attachment` | 附件（只存 S3 key 與 metadata，檔案本身在 S3） |
 | `parent_report_message` | 訊息串：政府回覆 / 內部備註 / 狀態變更稽核，一張表全包 |
 | `staff_profile` | 公務人員檔案（登入時自動建檔，提供回覆時的署名） |
-| `risk_score_current` | 風險指數（目前是 placeholder 假分數） |
+| `risk_score_current` | 風險指數（四維度加權的計算結果，`is_placeholder` 一律 0） |
 
 DDL 在 `db/migrations/`，用這行套用（會自己開 SSH tunnel）：
 
@@ -488,36 +494,90 @@ bucket（`ntpc-kg-report-attachments-<帳號ID>`）完全私有，
 **附件必須在驗證碼送出前登錄完成**，成案之後再打附件端點會得到
 `DRAFT_ALREADY_VERIFIED`。
 
-### 風險指數是 placeholder
+## 風險指數（正式演算法）
 
-演算法還沒定案。目前的作法讓前端可以先把畫面做完：
+四個維度，每個維度 0–100 分，總分是**加權平均**（也是 0–100，可以直接互相比較）。
+定義在 `src/risk.py`，改門檻不用動其他地方。
 
-- 5 個維度的 `key` / `label` / `weight` 已定案（`src/risk.py` 的 `DIMENSIONS`），
-  分數存在 `risk_score_current.dimensions`（JSON），換指標不用改 schema
-- `risk_level` 的 80 / 60 閾值寫在後端，前端只依 `riskLevel` 上色
-- API 一律回 `isPlaceholder: true`，畫面可以標示「示意資料」
+| 維度 | 權重 | 分數怎麼來 | 資料表 |
+|---|---|---|---|
+| 財務法遵 `finance` | 0.75 | 財報「法遵風險指數」× 4，上限 100 | `finance_report_current` |
+| 家長回報 `parent_report` | 1.00 | 還有未結案回報（`submitted`／`investigating`）= 100，否則 0 | `parent_report` |
+| 輿情關注 `opinion` | 0.50 | 最近一次掃描的「關注指數」× 2.5，上限 100 | `opinion_scan_job` |
+| 裁罰紀錄 `compliance` | 0.75 | 罰鍰總額 > 10 萬 = 100；有紀錄但未達 = 50；無紀錄 = 0 | `kindergarten_punishment` |
 
-灌假分數（分數由 id 雜湊決定所以每次一樣，且刻意涵蓋紫／紅／預設三種）：
+`totalScore = Σ(score × weight) ÷ 3.0`，上限 100；`riskLevel` 依 65 / 45 分級
+（`risk.py` 的 `HIGH_THRESHOLD` / `MEDIUM_THRESHOLD`）。四個維度給的是粗訊號
+（家長回報與裁罰紀錄都是階梯分數），加權平均後分數天然偏低，用 80 / 60 會讓
+「罰鍰超過 10 萬」這種明確訊號被歸成一般。
+
+### 缺資料不計 0 分
+
+財報只有 10 間學校有（決算書要人工蒐集），輿情要承辦人按按鈕才有。
+把「沒查過」當 0 分等於「沒查過 = 安全」，會系統性低估，所以：
+
+> **缺資料的維度不計分，它的權重平均分配給還有資料的維度。**
+
+回給前端的 `weight` 是分配後的**有效權重**，`baseWeight` 才是原始權重。
+最常見的情形（財報與輿情都沒有）就是 1.25 平均加到家長回報（1.625）與
+裁罰紀錄（1.375）。家長回報與裁罰紀錄一定有資料，所以總分不會算不出來。
+
+### 即時更新
+
+| 觸發點 | 做了什麼 |
+|---|---|
+| 打開風險 Tab（`GET .../risk`） | 每次都重算，並寫回 `risk_score_current`（清單頁跟著更新） |
+| 家長回報通過驗證成案 | `reports.verify_otp` → `risk.recompute` |
+| 承辦人變更案件狀態（結案／不受理／重啟） | `reports_admin.patch_report` → `risk.recompute` |
+| 輿情掃描完成 | `opinion_worker` 在把 job 標成 `done` **之後** → `risk.recompute` |
+
+`risk.recompute()` 會吞掉例外：風險分數是衍生資料，重算失敗不該讓「回覆家長」
+或「輿情掃描」整個失敗，下一次打開風險 Tab 就會自動補算回來。
+
+### 第一次上線 / 改完公式要跑的兩支腳本
 
 ```powershell
-python tools/seed_risk_placeholder.py            # 只灌新北市（1108 間）
-python tools/seed_risk_placeholder.py --all      # 全國
-python tools/seed_risk_placeholder.py --clear    # 清掉假資料
+$env:DB_PASSWORD = "..."          # 或從 deploy.config.ps1 取
+python tools/migrate.py                 # 建 finance_report_current
+python tools/load_finance_risk.py       # 載入財報 CSV（只取 113），順便重算那 10 間
+python tools/recompute_risk.py          # 清掉 placeholder 假分數 + 全量重算新北市
 ```
 
-接上真模型後，只要有東西去寫 `risk_score_current`，API 與前端都不用改。
+`recompute_risk.py` 預設**只算新北市**：其他縣市連裁罰紀錄都還沒爬，
+寫一堆 0 分會讓人誤以為「已評估且沒風險」。要全國就加 `--all`。
+（`is_placeholder` 欄位保留但一律寫 0，API 回 `isPlaceholder: false`。）
+
+## 財報法遵分析
+
+資料來源是決算書 PDF 的清理與指標計算產出
+（`data/finance_pdf_cleaning/analysis/outputs/risk_scores.csv`），
+用 `tools/load_finance_risk.py` 載進 `finance_report_current`，**只取 113 年度**。
+
+- **法遵風險指數**（CSV 的「法遵風險指數」）→ 財報 Tab 的主要數字，
+  也是雷達圖 finance 軸的來源（× 4，上限 100）
+- **八項指標的等級**：GREEN / YELLOW / RED，對應 CSV 的「等級分數」1 / 2 / 3，
+  0 = 這間學校缺該指標所需欄位。API 另外回一份 `flagged`（等級 ≥ 2），
+  前端不用自己過濾
+- 主要財務數字（收支、餘絀、流動比率、師生比…）分組存在 `metrics` JSON
+
+CSV 只有園名簡稱（「安溪」），資料庫是全名，所以用
+`新北市{簡稱}非營利幼兒園%` 比對。這條規則刻意寫得嚴：比對不到或比對到多筆
+就報錯跳過，不做模糊猜測（猜錯會把財務風險掛到別間學校）。目前 10 間全部一對一命中。
+
+**只有 10 間學校有資料，其餘回 `hasData: false`**，畫面顯示「尚無決算書分析資料」
+而不是 0 分。
 
 ### 測試
 
 ```powershell
 cd aws
-python local_test_reports.py                 # 63 項檢查，不寄信、不部署
+python local_test_reports.py                 # 84 項檢查，不寄信、不部署
 python local_test_reports.py --bucket ntpc-kg-report-attachments-135989901461   # 連 presign 一起測
 python local_test_reports.py --keep          # 保留測試資料以便手動看
 ```
 
 涵蓋：驗證碼錯誤／逾時／重複驗證、未驗證草稿不出現在政府端、跨縣市讀取回 404、
-家長看不到內部備註、不受理只有兩個節點、附件 key 綁定檢查、風險排序與公開端點不外洩風險欄位。
+家長看不到內部備註、不受理只有兩個節點、附件 key 綁定檢查、風險排序與公開端點不外洩風險欄位、風險指數四維度加權與權重重分配、成案/結案的即時重算、財報八項指標等級。
 
 測完的資料清理：
 
@@ -626,7 +686,7 @@ def list_something(cur, qs, identity):
 ```powershell
 cd aws
 python local_test.py           # 幼兒園 / 裁罰 / 縣市 端點
-python local_test_reports.py   # 家長回報全流程 + 政府端 + 風險（63 項檢查）
+python local_test_reports.py   # 家長回報全流程 + 政府端 + 風險 + 財報（84 項檢查）
 ```
 
 它們會自己開 SSH tunnel（透過 bastion EC2）連到私有的 RDS，把 `app.handler`
@@ -704,7 +764,7 @@ aws cloudformation delete-stack --stack-name ntpc-kg-api-auth --region us-east-1
 6. **CORS 開放 `*`**（API Gateway 與附件 bucket 都是）。現在同時要讓 CloudFront
    網址和本機 `localhost:4200` 都能呼叫，所以先開放。正式上線應改成只允許
    CloudFront 網域（附件 bucket 用 `UploadAllowedOrigins` 參數就能改）。
-7. **風險指數是假資料。** 見上面「風險指數是 placeholder」。
+7. **財報只有 10 間學校有資料。** 決算書要人工蒐集，所以財務法遵維度對其他園所是缺資料不計分（權重分給其他維度）。另外裁罰紀錄目前只爬了新北市，因此 `tools/recompute_risk.py` 預設也只算新北市。
 8. **每個 Lambda 冷啟動都要重連 MySQL。** 流量大時可考慮 RDS Proxy 管理連線池。
 9. **沒有自訂網域。** 目前用 `*.cloudfront.net`。若要 `xxx.example.com`，
    需要 Route 53 + ACM 憑證（憑證必須簽在 us-east-1，剛好我們就在這個 region）。

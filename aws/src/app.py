@@ -12,7 +12,8 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
   reports_admin.py 家長回報（政府端）
   mailer.py        SESv2 寄信（含 dev mode）
   storage.py       S3 presigned URL（附件）
-  risk.py          風險指數（目前是 placeholder）
+  risk.py          風險指數（四維度加權：財務法遵／家長回報／輿情關注／裁罰紀錄）
+  finance.py       財報法遵分析（法遵風險指數 + 各指標等級）
   opinion.py       輿情分析 job API（實際分析在 opinion_worker.py）
 
 完整的請求／回應格式定義在專案根目錄的 API_SPEC.md。
@@ -42,7 +43,8 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
   GET   /api/secure/reports/{id}            案件詳情（含附件與訊息串）
   POST  /api/secure/reports/{id}/messages   回覆家長 / 內部備註
   PATCH /api/secure/reports/{id}            變更狀態 / 指派承辦
-  GET   /api/secure/kindergartens/{id}/risk 風險評估（placeholder）
+  GET   /api/secure/kindergartens/{id}/risk 風險評估（四維度加權，讀取時即時重算）
+  GET   /api/secure/kindergartens/{id}/finance                財報法遵分析（113 決算年度）
   POST  /api/secure/kindergartens/{id}/opinion/scans          啟動輿情分析（非同步）
   GET   /api/secure/kindergartens/{id}/opinion/scans/{jobId}  查掃描進度
   GET   /api/secure/kindergartens/{id}/opinion                最新一次輿情結果
@@ -70,6 +72,7 @@ id 即為學校身分。kindergarten_punishment 透過外鍵 kindergarten_id 指
 import re
 
 import auth
+import finance
 import opinion
 import reports
 import reports_admin
@@ -467,10 +470,15 @@ def route_secure(cur, method, path, event, identity):
         body, err = parse_body(event)
         return err or reports_admin.add_message(cur, int(m.group(1)), body, identity)
 
-    # ---- 風險評估（placeholder）----
+    # ---- 風險評估（四維度加權，讀取時即時重算）----
     m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/risk", path)
     if m and method == "GET":
         return risk.get_risk(cur, int(m.group(1)), identity)
+
+    # ---- 財報法遵分析 ----
+    m = re.fullmatch(r"/api/secure/kindergartens/(\d+)/finance", path)
+    if m and method == "GET":
+        return finance.get_finance(cur, int(m.group(1)), identity)
 
     # ---- 輿情分析（非同步 job）----
     # 順序有意義：/opinion/scans/{jobId} 要排在 /opinion 之前比對。

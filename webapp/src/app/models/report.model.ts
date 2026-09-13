@@ -207,21 +207,103 @@ export interface PatchReportRequest {
 }
 
 // ---------- 風險評估 ----------
+/**
+ * 雷達圖的一個軸。
+ *
+ * `weight` 是**有效權重**（缺資料的維度權重會被平均分配給其他維度，
+ * 所以它不一定等於 `baseWeight`）；`score === null` 代表這個維度沒有資料，
+ * 不計分，畫面要標示「尚無資料」而不是畫 0。
+ */
 export interface RiskDimension {
-  key: string;
+  key: 'finance' | 'parent_report' | 'opinion' | 'compliance' | string;
   label: string;
   score: number | null;
   weight: number;
+  baseWeight?: number;
+  /** 後端給的說明（例如「尚有 2 件未結案回報」），直接顯示，不要自己編 */
+  detail?: {
+    note?: string;
+    complianceIndex?: number | null;
+    fiscalYear?: string | null;
+    overallLevel?: string | null;
+    openCount?: number;
+    totalCount?: number;
+    attentionScore?: number | null;
+    scannedAt?: string | null;
+    recordCount?: number;
+    totalFine?: number;
+  };
 }
 
 export interface RiskAssessment {
   kindergartenId: number;
+  schoolName?: string;
+  /** 加權平均（0–100）；四個維度全都沒資料時才會是 null */
   totalScore: number | null;
   riskLevel: RiskLevel | null;
+  /** 正式演算法上線後一律 false，保留欄位是為了相容 */
   isPlaceholder: boolean;
   modelVersion: string | null;
   computedAt: string | null;
   dimensions: RiskDimension[];
+  disclaimer?: string;
+}
+
+// ---------- 財報法遵分析 ----------
+/** 指標等級。GREEN/YELLOW/RED 對應 levelScore 1/2/3，N/A 對應 0（缺欄位） */
+export type FinanceIndicatorLevel = 'GREEN' | 'YELLOW' | 'RED' | 'N/A';
+
+export interface FinanceIndicator {
+  key: string;
+  label: string;
+  level: FinanceIndicatorLevel;
+  /** 0 = 無資料、1 = 正常、2 = 注意、3 = 警示 */
+  levelScore: 0 | 1 | 2 | 3;
+  levelLabel: string;
+  /** 跟自己歷年比的 z 分數 */
+  yearZ: number | null;
+  /** 跟同業比的 z 分數 */
+  peerZ: number | null;
+}
+
+export interface FinanceMetricItem {
+  label: string;
+  value: number | null;
+  /** 元 / % / 倍 / 人 / 空字串 */
+  unit: string;
+}
+
+export interface FinanceMetricGroup {
+  label: string;
+  items: FinanceMetricItem[];
+}
+
+/** GET /api/secure/kindergartens/{id}/finance */
+export interface FinanceReport {
+  kindergartenId: number;
+  schoolName: string;
+  /** false = 這間園沒有決算書分析資料（只有 10 間有），前端要顯示「尚無資料」 */
+  hasData: boolean;
+  disclaimer: string;
+  scoreFormula: string;
+  indicators: FinanceIndicator[];
+  financeId?: string | null;
+  alias?: string | null;
+  /** 決算年度（民國），目前一律 113 */
+  fiscalYear?: string;
+  /** 法遵風險指數 */
+  complianceIndex?: number | null;
+  /** 整體風險等級（低風險／中風險／高風險） */
+  overallLevel?: string | null;
+  earlyWarning?: string | null;
+  /** 換算進雷達圖 finance 軸的分數（指數 × 4，上限 100） */
+  riskScore?: number | null;
+  riskWeight?: number;
+  /** 等級 >= 2（注意／警示）的指標 */
+  flagged?: FinanceIndicator[];
+  metrics?: { groups: FinanceMetricGroup[] };
+  sourceFile?: string | null;
+  updatedAt?: string | null;
 }
 
 // ---------- 輿情分析 ----------

@@ -1,4 +1,4 @@
-"""本機測試家長回報全流程（不需部署，透過 bastion SSH tunnel 連 RDS）。
+﻿"""本機測試家長回報全流程（不需部署，透過 bastion SSH tunnel 連 RDS）。
 
 用法：
     cd aws
@@ -8,7 +8,7 @@
   1. 家長端：建草稿 -> 用錯的驗證碼 -> 用對的驗證碼 -> 追蹤頁
   2. 附件：presign（有設 ATTACH_BUCKET 才測）
   3. 政府端：清單 / 摘要 / 詳情 / 回覆 / 狀態變更 / 跨縣市防護
-  4. 風險 placeholder
+  4. 風險指數（四維度加權）+ 財報法遵分析
   5. 收尾把測試資料刪掉（--keep 可保留）
 
 MAIL_MODE 固定為 dev，所以不會真的寄信，驗證碼直接從回應的 devOtp 取得。
@@ -187,6 +187,26 @@ def main():
         check("重複驗證回 DRAFT_ALREADY_VERIFIED",
               body.get("code") == "DRAFT_ALREADY_VERIFIED")
 
+        # 成案的當下就要反映在風險指數上（reports.verify_otp 呼叫 risk.recompute）
+        code, rbody = call("GET", f"/api/secure/kindergartens/{school['id']}/risk",
+                           identity={"sub": "risk-check-sub", "username": "test.ntpc",
+                                     "county": "新北市", "agency": "新北市教育局"})
+        rdim = next(d for d in rbody["dimensions"] if d["key"] == "parent_report")
+        check("成案後家長回報維度立刻變 100（即時更新）",
+              rdim["score"] == 100.0 and rdim["detail"]["openCount"] >= 1,
+              f"score={rdim['score']} open={rdim['detail']['openCount']}")
+        with app.get_conn().cursor() as cur:
+            cur.execute(
+                "SELECT total_score, is_placeholder, model_version FROM risk_score_current "
+                "WHERE kindergarten_id = %s", (school["id"],)
+            )
+            stored = cur.fetchone() or {}
+        check("重算結果已寫回 risk_score_current（清單頁同步）",
+              stored.get("is_placeholder") == 0
+              and stored.get("model_version") == "risk-v1"
+              and stored.get("total_score") is not None,
+              str(stored))
+
         print("\n=== 4. 追蹤頁 ===")
         code, body = call("GET", f"/api/reports/{token}")
         check("追蹤頁回 200", code == 200, str(body)[:120])
@@ -292,18 +312,95 @@ def main():
               steps[-1]["key"] == "rejected" and steps[-1]["state"] == "current")
         check("理由顯示給家長", body.get("statusReason") == "非本局管轄範圍")
 
-        # ---------- 7. 風險 placeholder ----------
-        print("\n=== 7. 風險指數 placeholder ===")
+        # ---------- 7. 風險指數（正式演算法）+ 財報法遵 ----------
+        print("\n=== 7. 風險指數（四維度加權）===")
         code, body = call("GET", f"/api/secure/kindergartens/{school['id']}/risk",
                           identity=ntpc)
         check("風險端點回 200", code == 200, str(body)[:150])
         dims = body.get("dimensions") or []
-        check("五個維度且 key 固定", len(dims) == 5 and dims[0]["key"] == "finance",
-              str([d["key"] for d in dims]))
-        check("isPlaceholder=True", body.get("isPlaceholder") is True)
+        keys = [d["key"] for d in dims]
+        check("四個維度且順序固定",
+              keys == ["finance", "parent_report", "opinion", "compliance"], str(keys))
+        check("不再有資料完整度維度", "data_quality" not in keys)
+        check("isPlaceholder=False", body.get("isPlaceholder") is False)
+        check("modelVersion 不是 placeholder",
+              (body.get("modelVersion") or "").startswith("risk-"),
+              str(body.get("modelVersion")))
+        weighted = sum(
+            (d["score"] or 0) * d["weight"] for d in dims if d["score"] is not None
+        )
+        expected = min(100.0, round(weighted / 3.0, 2))
+        check("總分 = Σ(score×weight)/3 且 <=100",
+              body.get("totalScore") is not None
+              and abs(body["totalScore"] - expected) < 0.02
+              and body["totalScore"] <= 100,
+              f"total={body.get('totalScore')} expected={expected}")
+        present = [d for d in dims if d["score"] is not None]
+        check("有效權重加總為 3.0（缺資料的權重已分配掉）",
+              abs(sum(d["weight"] for d in present) - 3.0) < 0.01,
+              str([(d["key"], d["weight"]) for d in dims]))
+        report_dim = next(d for d in dims if d["key"] == "parent_report")
+        check("案件改不受理後家長回報維度回到 0（狀態變更也會即時重算）",
+              report_dim["score"] == 0.0
+              and report_dim["detail"]["openCount"] == 0,
+              f"score={report_dim['score']} open={report_dim['detail']['openCount']}")
+        check("風險等級依 65/45 閾值",
+              body.get("riskLevel") == (
+                  "high" if body["totalScore"] >= 65
+                  else "medium" if body["totalScore"] >= 45 else "normal"),
+              f"{body.get('riskLevel')} @ {body.get('totalScore')}")
+
         code, body = call("GET", f"/api/secure/kindergartens/{other_school['id']}/risk",
                           identity=ntpc)
         check("別縣市的園回 404", code == 404)
+
+        print("\n=== 7b. 財報法遵分析 ===")
+        with app.get_conn().cursor() as cur:
+            cur.execute(
+                "SELECT kindergarten_id FROM finance_report_current "
+                "ORDER BY compliance_index DESC LIMIT 1"
+            )
+            fin_row = cur.fetchone()
+        if fin_row:
+            fin_id = fin_row["kindergarten_id"]
+            code, body = call("GET", f"/api/secure/kindergartens/{fin_id}/finance",
+                              identity=ntpc)
+            check("財報端點回 200", code == 200, str(body)[:150])
+            check("hasData=True", body.get("hasData") is True)
+            check("年度為 113", body.get("fiscalYear") == "113",
+                  str(body.get("fiscalYear")))
+            check("有法遵風險指數", isinstance(body.get("complianceIndex"), (int, float)),
+                  str(body.get("complianceIndex")))
+            check("風險分數 = 指數×4 且上限 100",
+                  body.get("riskScore") == min(
+                      100.0, round(body["complianceIndex"] * 4, 2)),
+                  f"{body.get('complianceIndex')} -> {body.get('riskScore')}")
+            inds = body.get("indicators") or []
+            check("八項指標都有回", len(inds) == 8, str(len(inds)))
+            check("等級分數在 0-3",
+                  all(i["levelScore"] in (0, 1, 2, 3) for i in inds),
+                  str([(i["label"], i["levelScore"]) for i in inds]))
+            check("flagged 只含等級>=2 的指標",
+                  all(i["levelScore"] >= 2 for i in body.get("flagged") or []),
+                  str([i["label"] for i in body.get("flagged") or []]))
+            check("有主要財務數字", bool((body.get("metrics") or {}).get("groups")))
+            # 財報維度的分數要與財報端點一致
+            code, rbody = call("GET", f"/api/secure/kindergartens/{fin_id}/risk",
+                               identity=ntpc)
+            fdim = next(d for d in rbody["dimensions"] if d["key"] == "finance")
+            check("雷達圖 finance 軸 = 財報端點的 riskScore",
+                  fdim["score"] == body["riskScore"],
+                  f"{fdim['score']} vs {body['riskScore']}")
+        else:
+            check("財報資料存在（先跑 tools/load_finance_risk.py）", False)
+
+        code, body = call("GET", f"/api/secure/kindergartens/{school['id']}/finance",
+                          identity=ntpc)
+        check("沒有財報資料的園回 hasData=False（不是 0 分）",
+              code == 200 and body.get("hasData") is False, str(body)[:120])
+        code, body = call("GET", f"/api/secure/kindergartens/{other_school['id']}/finance",
+                          identity=ntpc)
+        check("財報端點也擋跨縣市（404）", code == 404)
 
         code, body = call("GET", "/api/secure/kindergartens?pageSize=3", identity=ntpc)
         first = (body.get("items") or [{}])[0]
@@ -315,13 +412,16 @@ def main():
             identity=ntpc)
         scores = [i.get("risk_score") for i in body.get("items", [])]
         seeded = any(s is not None for s in scores)
-        check("依 risk_score 排序（需先跑 tools/seed_risk_placeholder.py）",
+        check("依 risk_score 排序（需先跑 tools/recompute_risk.py）",
               code == 200 and (not seeded or scores == sorted(
                   [s for s in scores if s is not None], reverse=True)),
               str(scores))
         levels = {i.get("risk_level") for i in body.get("items", [])}
         check("風險等級值在白名單內",
               levels <= {"high", "medium", "normal", None}, str(levels))
+        placeholders = {i.get("risk_is_placeholder") for i in body.get("items", [])}
+        check("清單裡沒有 placeholder 假資料", placeholders <= {0, None},
+              str(placeholders))
 
         code, body = call("GET", "/api/kindergartens?pageSize=1")
         check("公開清單不含風險欄位（僅政府端可見）",

@@ -21,6 +21,7 @@ import secrets
 from hashlib import sha256
 
 import mailer
+import risk
 import storage
 from common import error, iso, mask_email, respond, text_field, utcnow
 
@@ -231,6 +232,9 @@ def verify_otp(cur, draft_id, data):
 
     row = _load_draft(cur, draft_id)
     no = case_no(row)
+    # 成案 = 多一筆未結案回報，「家長回報」維度會變成 100 分。
+    # 立刻重算，dashboard 的風險欄位不用等人打開風險 Tab 才更新。
+    risk.recompute(cur, row["kindergarten_id"])
     mailer.send_tracking_link(
         row["reporter_email"], no, token, row["school_name"]
     )

@@ -9,8 +9,11 @@
  * Cognito 的 app client 也刻意不帶 secret（SPA 無法保管密鑰）。
  *
  * 註：mock 切換不放在這裡的全域旗標，而是由各 service 內部各自控制
- * （ReportService §2/§3、SecureReportService 的風險 §4.8 目前仍 mock），
- * 這樣某一塊 API 上線時不會牽動其他仍在 mock 的功能。
+ * （ReportService §2/§3）。SecureReportService 已全部改打真實 API，
+ * 包含風險評估 §4.8 與財報 §4.9。
+ *
+ * `ng serve` 也是打這個 apiBaseUrl（不是 localhost），所以後端改完要先
+ * `cd aws; .\deploy.ps1`，否則新端點會回 404。
  */
 export const environment = {
   apiBaseUrl: 'https://e86tz73y7h.execute-api.us-east-1.amazonaws.com',
