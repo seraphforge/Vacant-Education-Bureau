@@ -44,6 +44,28 @@
   padding: 2rem 0;
 }
 
+/* 學校統整搜尋列 */
+.dash__search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.dash__search-name {
+  flex: 1 1 18rem;
+  min-width: 14rem;
+
+  input {
+    width: 100%;
+  }
+}
+
+:host ::ng-deep .dash__search-ownership {
+  min-width: 8rem;
+}
+
 /* 整列文字顏色（UI_SPEC §6.2.1）。用 ::ng-deep 讓顏色套進 p-table 的 td。 */
 :host ::ng-deep tr.row--risk-high > td {
   color: #7c3aed; /* 紫色：風險指數 ≥ 80（high） */

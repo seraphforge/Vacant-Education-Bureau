@@ -18,6 +18,46 @@
     <p-tabView>
       <!-- ===== Tab 1：學校統整 ===== -->
       <p-tabPanel header="學校統整" leftIcon="pi pi-building">
+        <div class="dash__search">
+          <span class="p-input-icon-left dash__search-name">
+            <i class="pi pi-search"></i>
+            <input
+              type="text"
+              pInputText
+              name="schoolSearch"
+              [(ngModel)]="nameQuery"
+              (keyup.enter)="applySearch()"
+              placeholder="搜尋學校名稱關鍵字"
+            />
+          </span>
+
+          <p-dropdown
+            [options]="ownershipOptions"
+            optionLabel="label"
+            optionValue="value"
+            [(ngModel)]="ownershipFilter"
+            (ngModelChange)="applySearch()"
+            appendTo="body"
+            styleClass="dash__search-ownership"
+          ></p-dropdown>
+
+          <button
+            type="button"
+            pButton
+            icon="pi pi-search"
+            label="搜尋"
+            (click)="applySearch()"
+          ></button>
+          <button
+            type="button"
+            pButton
+            class="p-button-text"
+            icon="pi pi-times"
+            label="清除"
+            (click)="clearSearch()"
+          ></button>
+        </div>
+
         <p-table
           [value]="rows()"
           [lazy]="true"
