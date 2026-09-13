@@ -1,0 +1,64 @@
+digraph architecture {
+    rankdir=TB;
+    bgcolor="white";
+    fontname="Noto Sans CJK TC";
+    labelloc="t";
+    label=<<b>幼兒園查詢 · 家長回報 · 政府輿情分析平台　AWS 雲端架構總覽</b>>;
+    fontsize=28;
+    nodesep=0.5;
+    ranksep=0.85;
+    node [shape=box, style="rounded,filled", fontname="Noto Sans CJK TC", fontsize=17, penwidth=2, margin="0.22,0.16"];
+    edge [fontname="Noto Sans CJK TC", fontsize=14, color="#37474f", penwidth=1.8];
+
+    // ---- 第一排：使用者端 ----
+    subgraph cluster_users {
+        label=<<b>使用者端</b>>;
+        fontsize=19; style="rounded,filled"; fillcolor="#fafafa"; color="#90a4ae"; penwidth=2;
+        parent [label="一般家長 / 民眾", fillcolor="#eceff1", color="#546e7a"];
+        staff  [label="政府承辦人員", fillcolor="#eceff1", color="#546e7a"];
+        web    [label="Angular Web 應用程式", fillcolor="#eceff1", color="#546e7a"];
+        { rank=same; parent; staff; web; }
+    }
+
+    // ---- 第二排：AWS Serverless 平台 ----
+    subgraph cluster_platform {
+        label=<<b>AWS Serverless 平台　·　Region us-east-1</b>>;
+        fontsize=19; style="rounded,filled"; fillcolor="#f5faff"; color="#64b5f6"; penwidth=2;
+        cf     [label=<Amazon CloudFront + S3<br/><b>Angular 前端網站</b>>, fillcolor="#e8f5e9", color="#2e7d32"];
+        cog    [label=<Amazon Cognito<br/><b>政府登入與縣市權限</b>>, fillcolor="#e8f5e9", color="#2e7d32"];
+        apigw  [label=<Amazon API Gateway<br/><b>統一 API 入口</b>>, fillcolor="#e3f2fd", color="#1565c0"];
+        lambda [label=<AWS Lambda<br/><b>查詢 · 回報 · 後台邏輯</b>>, fillcolor="#e3f2fd", color="#1565c0"];
+        worker [label=<輿情分析 Worker<br/><b>AWS Lambda · 非同步</b>>, fillcolor="#e3f2fd", color="#1565c0"];
+        { rank=same; cf; cog; apigw; lambda; worker; }
+    }
+
+    // ---- 第三排：資料與 AI 服務 ----
+    subgraph cluster_backend {
+        label=<<b>資料與 AI 服務</b>>;
+        fontsize=19; style="rounded,filled"; fillcolor="#fff8f0"; color="#ffb74d"; penwidth=2;
+        rds  [label=<Amazon RDS for MySQL<br/><b>平台主要資料庫</b>>, fillcolor="#fff3e0", color="#e65100"];
+        ses  [label=<Amazon SES<br/><b>Email 驗證碼</b>>, fillcolor="#fff3e0", color="#e65100"];
+        s3a  [label=<Amazon S3<br/><b>家長回報附件</b>>, fillcolor="#fff3e0", color="#e65100"];
+        ai   [label=<公開資訊 + Bedrock + Comprehend<br/><b>蒐集 · AI 摘要 · 情緒分析</b>>, fillcolor="#f3e5f5", color="#6a1b9a"];
+        { rank=same; rds; ses; s3a; ai; }
+    }
+
+    // ---- 資料流 ----
+    parent -> web;
+    staff  -> web;
+    web -> cf     [label="載入網站"];
+    web -> apigw  [label="HTTPS API"];
+
+    staff -> cog  [label="登入 / ID Token", style=dashed, color="#2e7d32"];
+    cog -> apigw  [label="JWT 驗證依據", style=dashed, color="#2e7d32"];
+    web -> apigw  [label="Bearer ID Token"];
+
+    apigw -> lambda;
+    lambda -> rds;
+    lambda -> ses    [label="寄送"];
+    lambda -> s3a    [label="產生預簽網址"];
+    web -> s3a       [label="附件直傳", style=dashed, constraint=false];
+    lambda -> worker [label="非同步啟動"];
+    worker -> ai;
+    worker -> rds    [label="儲存分析結果"];
+}

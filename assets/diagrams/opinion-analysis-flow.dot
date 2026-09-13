@@ -1,0 +1,31 @@
+digraph opinion_flow {
+    rankdir=TB;
+    bgcolor="white";
+    fontname="Noto Sans CJK TC";
+    labelloc="t";
+    label=<<b>AI 輿情分析流程</b>>;
+    fontsize=28;
+    nodesep=0.55;
+    ranksep=1.1;
+    node [shape=box, style="rounded,filled", fontname="Noto Sans CJK TC", fontsize=18, penwidth=2, margin="0.28,0.20", width=3.4];
+    edge [color="#37474f", penwidth=2, arrowsize=1.1];
+
+    a1 [label=<<b>① 政府人員啟動分析</b>>, fillcolor="#e3f2fd", color="#1565c0"];
+    a2 [label=<<b>② API 建立分析工作</b><br/>工作狀態寫入 RDS>, fillcolor="#e3f2fd", color="#1565c0"];
+    a3 [label=<<b>③ 非同步啟動 Lambda Worker</b><br/>API 立即回傳工作編號>, fillcolor="#f3e5f5", color="#6a1b9a"];
+    a4 [label=<<b>④ 蒐集公開資訊</b><br/>政府開放資料 · 新聞 RSS · 公開搜尋>, fillcolor="#f3e5f5", color="#6a1b9a"];
+    a5 [label=<<b>⑤ AI 輔助分析</b><br/>Bedrock 摘要 · Comprehend 情緒>, fillcolor="#f3e5f5", color="#6a1b9a"];
+    a6 [label=<<b>⑥ 結果寫回 RDS</b><br/>前端輪詢顯示>, fillcolor="#fff3e0", color="#e65100"];
+    note [label="AI 結果僅為『需要人工關注的線索』，非違法事實，不得單獨作為裁處依據", shape=note, fillcolor="#fffde7", color="#f9a825", fontsize=15];
+
+    // 第一排（由左至右）：①②③
+    { rank=same; a1 -> a2 -> a3 [constraint=false]; }
+    // 第二排（由左至右）：④⑤⑥
+    { rank=same; a4 -> a5 -> a6 [constraint=false]; }
+
+    // 唯一建立上下階層的邊：由 ③ 折到 ④（蛇形換行）
+    a3 -> a4;
+
+    note -> a6 [style=dashed, dir=none, color="#f9a825", constraint=false];
+    { rank=same; a6; note; }
+}

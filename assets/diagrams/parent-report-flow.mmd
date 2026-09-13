@@ -1,0 +1,14 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Noto Sans CJK TC, Microsoft JhengHei, sans-serif","fontSize":"20px","lineColor":"#37474f"}}}%%
+flowchart LR
+    classDef step fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1;
+    classDef svc fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100;
+
+    S1["① 家長填寫回報<br/>經 API Gateway + Lambda 建立草稿"]:::step
+    S2["② Email 驗證<br/>Lambda 透過 Amazon SES 寄出 OTP"]:::svc
+    S3["③ 附件直接上傳<br/>預簽網址 → 瀏覽器直傳私有 S3"]:::svc
+    S4["④ 驗證成功正式成案<br/>案件與附件寫入 RDS MySQL"]:::step
+    S5["⑤ 追蹤與政府處理<br/>家長追蹤 · 政府登入回覆"]:::step
+
+    S1 --> S2 --> S3 --> S4 --> S5
+    NOTE["Email 驗證降低匿名濫用；附件經預簽網址直傳，S3 不對外公開"]
+    S5 -.-> NOTE

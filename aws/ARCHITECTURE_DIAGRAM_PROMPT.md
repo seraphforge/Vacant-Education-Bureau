@@ -39,7 +39,18 @@ CloudFormation Stack 等部署細節全部放進同一張圖，因此資訊雖�
 - 使用粗線箭頭，不交叉、不繞行；投影時必須能從後排看清楚。
 - 每個方塊最多兩行字，不放長段落、程式名稱或完整 API 路徑。
 - 將同類服務合併呈現，整張圖不超過 10 個 AWS 服務方塊。
+- **不要畫成單一長橫條**：請把元件分成 2～3 排堆疊（上下分層），避免整張圖過寬、
+  塞進投影片後字變得太小。核心架構用「使用者端 / 平台 / 資料與 AI 服務」三排；
+  流程圖則把步驟折成兩排蛇形排列（例如 6 步拆成 3+3）。
 - 輸出 SVG 或高解析 PNG，不要輸出程式碼截圖或 Mermaid 編輯器畫面。
+
+> 已產出的圖片檔（Graphviz 繪製）：
+> - `assets/architecture-overview.png`（三排堆疊的核心總覽）
+> - `assets/parent-report-flow.png`（兩排蛇形的家長回報流程）
+> - `assets/opinion-analysis-flow.png`（兩排蛇形的 AI 輿情分析流程）
+>
+> 原始 `.dot` 檔在 `assets/diagrams/`，重繪指令：
+> `dot -Tpng -Gdpi=150 assets/diagrams/<name>.dot -o assets/<name>.png`
 
 ## 版面配置
 

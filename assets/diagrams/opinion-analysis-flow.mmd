@@ -1,0 +1,16 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Noto Sans CJK TC, Microsoft JhengHei, sans-serif","fontSize":"20px","lineColor":"#37474f"}}}%%
+flowchart LR
+    classDef api fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1;
+    classDef worker fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#4a148c;
+    classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100;
+
+    A1["① 政府人員啟動分析"]:::api
+    A2["② API 建立分析工作<br/>工作狀態寫入 RDS"]:::api
+    A3["③ 非同步啟動 Lambda Worker<br/>API 立即回傳工作編號"]:::worker
+    A4["④ 蒐集公開資訊<br/>政府開放資料 · 新聞 RSS · 公開搜尋"]:::worker
+    A5["⑤ AI 輔助分析<br/>Bedrock 摘要 · Comprehend 情緒"]:::worker
+    A6["⑥ 結果寫回 RDS<br/>前端輪詢顯示"]:::data
+
+    A1 --> A2 --> A3 --> A4 --> A5 --> A6
+    NOTE["AI 結果僅為『需要人工關注的線索』，非違法事實，不得單獨作為裁處依據"]
+    A6 -.-> NOTE

@@ -1,0 +1,30 @@
+digraph parent_report {
+    rankdir=TB;
+    bgcolor="white";
+    fontname="Noto Sans CJK TC";
+    labelloc="t";
+    label=<<b>家長回報流程</b>>;
+    fontsize=28;
+    nodesep=0.55;
+    ranksep=1.1;
+    node [shape=box, style="rounded,filled", fontname="Noto Sans CJK TC", fontsize=18, penwidth=2, margin="0.28,0.20", width=3.4];
+    edge [color="#37474f", penwidth=2, arrowsize=1.1];
+
+    s1 [label=<<b>① 家長填寫回報</b><br/>經 API Gateway + Lambda 建立草稿>, fillcolor="#e3f2fd", color="#1565c0"];
+    s2 [label=<<b>② Email 驗證</b><br/>Lambda 透過 Amazon SES 寄出 OTP>, fillcolor="#fff3e0", color="#e65100"];
+    s3 [label=<<b>③ 附件直接上傳</b><br/>預簽網址 → 瀏覽器直傳私有 S3>, fillcolor="#fff3e0", color="#e65100"];
+    s4 [label=<<b>④ 驗證成功正式成案</b><br/>案件與附件寫入 RDS MySQL>, fillcolor="#e3f2fd", color="#1565c0"];
+    s5 [label=<<b>⑤ 追蹤與政府處理</b><br/>家長追蹤 · 政府登入回覆>, fillcolor="#e3f2fd", color="#1565c0"];
+    note [label="Email 驗證降低匿名濫用；附件經預簽網址直傳，S3 不對外公開", shape=note, fillcolor="#fffde7", color="#f9a825", fontsize=15];
+
+    // 第一排（由左至右）：橫向邊不建立階層
+    { rank=same; s1 -> s2 -> s3 [constraint=false]; }
+    // 第二排（由左至右）
+    { rank=same; s4 -> s5 [constraint=false]; }
+
+    // 唯一建立上下階層的邊：把第二排壓到第一排底下，並形成蛇形折返
+    s3 -> s4;
+
+    note -> s5 [style=dashed, dir=none, color="#f9a825", constraint=false];
+    { rank=same; s5; note; }
+}
