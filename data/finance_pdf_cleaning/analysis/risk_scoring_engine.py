@@ -306,31 +306,58 @@ class EventDataIntegrator:
 # ===========================================================================
 # Stage 4: 交叉驗證與風險評分 MVP 模型
 # ===========================================================================
+# 風險方向類型（輸出時標明是哪一種風險）
+RISK_HIGH = "HIGH"    # 高於正常範圍 → 風險
+RISK_LOW = "LOW"      # 低於正常範圍 → 風險
+RISK_SHIFT = "SHIFT"  # 突然變化（不分方向）→ 風險
+
+
 @dataclass
 class IndicatorSpec:
-    """單一評分指標的設定。
+    """單一評分指標的設定，支援三種風險方向判斷。
 
-    column   : 特徵表中的欄位名
-    higher_bad: True 表示數值越高越危險（如師生比、加班費負荷）；
-                False 表示越低越危險（如流動比率——本 MVP 8 指標多為 higher_bad）。
-    面向     : 財務 / 營運 / 事件
+    每個指標可同時啟用多種方向：
+      high_risk : 偏離度往「高」的方向達門檻 → 風險（過高，如師生比過高）
+      low_risk  : 偏離度往「低」的方向達門檻 → 風險（過低，如人事費/生過低=人力投入不足）
+      shift_risk: 不分方向，只要「突然變化」（相對自身歷史的 |z| 大）→ 風險
+    綜合等級取三種方向中最嚴重者，並記錄觸發的風險方向類型。
+
+    higher_bad 保留為相容參數：若未明確指定三旗標，預設 high_risk=True。
     """
     key: str
     column: str
-    higher_bad: bool = True
     面向: str = "財務"
+    high_risk: bool = True
+    low_risk: bool = False
+    shift_risk: bool = False
+    # 相容舊介面
+    higher_bad: bool | None = None
+
+    def __post_init__(self):
+        if self.higher_bad is not None:
+            # 舊式：higher_bad=True → high_risk；False → low_risk
+            self.high_risk = self.higher_bad
+            self.low_risk = not self.higher_bad
 
 
-# MVP 8 核心指標
+# MVP 8 核心指標（依「過高/過低/突變」三方向設定）
 CORE_INDICATORS = [
-    IndicatorSpec("每生人事費", "每生人事費", True, "財務"),
-    IndicatorSpec("人事費年增率", "人事費_YoY", True, "財務"),
-    IndicatorSpec("預決算偏離率", "預算偏離率", True, "財務"),
-    IndicatorSpec("經費流用比例", "經費流用比例", True, "財務"),
-    IndicatorSpec("師生比", "師生比", True, "營運"),
-    IndicatorSpec("教職員流動率", "教職員流動率", True, "營運"),
-    IndicatorSpec("加班費負荷", "加班費負荷", True, "營運"),
-    IndicatorSpec("不當管教事件", "不當管教回報數", True, "事件"),
+    # 每生人事費：過高=成本過重、過低=人力投入不足、突變=查帳務人員異動
+    IndicatorSpec("每生人事費", "每生人事費", "財務", high_risk=True, low_risk=True, shift_risk=True),
+    # 人事費年增率：突變最重要（多年穩定後突然 +30%），過高/過低皆須查
+    IndicatorSpec("人事費年增率", "人事費_YoY", "財務", high_risk=True, low_risk=True, shift_risk=True),
+    # 預決算偏離率：過高=超支、過低=編列失準/計畫未執行、突變=某年大幅偏離
+    IndicatorSpec("預決算偏離率", "預算偏離率", "財務", high_risk=True, low_risk=True, shift_risk=True),
+    # 經費流用比例：過高=紀律鬆散、突變=某年突然大量流用（重點查核）
+    IndicatorSpec("經費流用比例", "經費流用比例", "財務", high_risk=True, low_risk=False, shift_risk=True),
+    # 師生比(學生/教保)：過高=負擔過重、突變=教保驟減
+    IndicatorSpec("師生比", "師生比", "營運", high_risk=True, low_risk=False, shift_risk=True),
+    # 教職員流動率：過高=人力不穩、突變=某年大量離職（重要警訊）
+    IndicatorSpec("教職員流動率", "教職員流動率", "營運", high_risk=True, low_risk=False, shift_risk=True),
+    # 加班費負荷：過高=過勞、突變=某年暴增
+    IndicatorSpec("加班費負荷", "加班費負荷", "營運", high_risk=True, low_risk=False, shift_risk=True),
+    # 不當管教事件：過高=直接警訊
+    IndicatorSpec("不當管教事件", "不當管教回報數", "事件", high_risk=True, low_risk=False, shift_risk=False),
 ]
 
 
@@ -422,16 +449,61 @@ class KindergartenRiskScoringEngine:
             result[fill] = z[fill]
         return result
 
-    @staticmethod
-    def _flag(z: float, yellow_th: float, red_th: float, higher_bad: bool) -> str:
-        if pd.isna(z):
-            return LEVEL_NA  # 資料不足
-        signed = z if higher_bad else -z
-        if signed >= red_th:
+    def _level_from_z(self, signed_z: float) -> str:
+        """由『帶方向的偏離度』判等級：越大越嚴重。"""
+        if pd.isna(signed_z):
+            return LEVEL_NA
+        if signed_z >= self.red_th:
             return LEVEL_RED
-        if signed >= yellow_th:
+        if signed_z >= self.yellow_th:
             return LEVEL_YELLOW
         return LEVEL_GREEN
+
+    def _evaluate(self, spec: IndicatorSpec, z_hist: float, z_peer: float, z_shift: float):
+        """綜合過高/過低/突變三方向，回傳 (等級, 觸發的風險方向清單)。
+
+        z_hist/z_peer：歷年、同業偏離度（正=高於基準，負=低於基準）。
+        z_shift      ：突變偏離度（用歷年 z 的絕對值，不分方向）。
+        """
+        candidates = []  # (等級, 風險方向)
+
+        # 過高：任一維度往高偏離
+        if spec.high_risk:
+            hi = max(
+                self._level_from_z(z_hist) if pd.notna(z_hist) else LEVEL_NA,
+                self._level_from_z(z_peer) if pd.notna(z_peer) else LEVEL_NA,
+                key=lambda x: LEVEL_RANK[x],
+            )
+            candidates.append((hi, RISK_HIGH))
+
+        # 過低：任一維度往低偏離（取負號後判定）
+        if spec.low_risk:
+            lo = max(
+                self._level_from_z(-z_hist) if pd.notna(z_hist) else LEVEL_NA,
+                self._level_from_z(-z_peer) if pd.notna(z_peer) else LEVEL_NA,
+                key=lambda x: LEVEL_RANK[x],
+            )
+            candidates.append((lo, RISK_LOW))
+
+        # 突變：用歷年偏離度的絕對值（不分正負）
+        if spec.shift_risk:
+            sh = self._level_from_z(abs(z_shift)) if pd.notna(z_shift) else LEVEL_NA
+            candidates.append((sh, RISK_SHIFT))
+
+        if not candidates:
+            return LEVEL_NA, ""
+
+        # 取最嚴重的等級；同時收集所有達 YELLOW 以上的風險方向
+        best_level = max(candidates, key=lambda c: LEVEL_RANK[c[0]])[0]
+        dirs = sorted(
+            {d for lv, d in candidates if LEVEL_RANK[lv] >= LEVEL_RANK[LEVEL_YELLOW]},
+            key=lambda d: {RISK_HIGH: 0, RISK_LOW: 1, RISK_SHIFT: 2}[d],
+        )
+        if best_level == LEVEL_NA:
+            return LEVEL_NA, "無資料"
+        if not dirs:
+            return best_level, "正常"  # 有資料但未達風險門檻
+        return best_level, "+".join(dirs)
 
     def score(
         self,
@@ -453,25 +525,26 @@ class KindergartenRiskScoringEngine:
         for spec in self.indicators:
             col = spec.column
             if col not in df:
-                # 指標缺欄位：整欄 NaN，等級 N/A
+                # 指標缺欄位：整欄 NaN，等級 N/A，風險方向留空（無資料）
                 df[f"{spec.key}_歷年z"] = np.nan
                 df[f"{spec.key}_同業z"] = np.nan
                 df[f"{spec.key}_等級"] = LEVEL_NA
                 df[f"{spec.key}_等級分數"] = LEVEL_RANK[LEVEL_NA]
+                df[f"{spec.key}_風險方向"] = "無資料"
                 continue
             zh = self._self_historical_z(df, col)
             zp = self._peer_relative_z(df, col)
             df[f"{spec.key}_歷年z"] = zh
             df[f"{spec.key}_同業z"] = zp
-            # 綜合等級：取兩維度中較嚴重者
-            flags_h = [self._flag(z, self.yellow_th, self.red_th, spec.higher_bad) for z in zh]
-            flags_p = [self._flag(z, self.yellow_th, self.red_th, spec.higher_bad) for z in zp]
-            levels = [
-                a if LEVEL_RANK[a] >= LEVEL_RANK[b] else b
-                for a, b in zip(flags_h, flags_p)
-            ]
+            # 綜合等級（過高/過低/突變三方向）：突變用歷年 z 的絕對值
+            levels, dirs = [], []
+            for a, b in zip(zh, zp):
+                lv, dr = self._evaluate(spec, a, b, a)
+                levels.append(lv)
+                dirs.append(dr)
             df[f"{spec.key}_等級"] = levels
             df[f"{spec.key}_等級分數"] = [LEVEL_RANK[x] for x in levels]
+            df[f"{spec.key}_風險方向"] = dirs
 
         # 法遵風險指數：各指標等級點數 × 面向權重 加總，再正規化到 0~100
         max_possible = sum(2.0 * self.weights.get(s.面向, 1.0) for s in self.indicators)
@@ -672,7 +745,12 @@ def _demo():
     level_cols = [c for c in result.columns if c.endswith("_等級")]
     for _, r in y113.iterrows():
         print(f"\n【{r['幼兒園ID']}】 風險指數 {r['法遵風險指數']} → {r['整體風險等級']}")
-        lit = [f"{c.replace('_等級','')}:{r[c]}" for c in level_cols if r[c] in (LEVEL_RED, LEVEL_YELLOW)]
+        lit = []
+        for c in level_cols:
+            if r[c] in (LEVEL_RED, LEVEL_YELLOW):
+                key = c.replace("_等級", "")
+                direction = r.get(f"{key}_風險方向", "")
+                lit.append(f"{key}:{r[c]}({direction})")
         print("  異常指標：" + ("、".join(lit) if lit else "無"))
         if "事件前預警" in r:
             print(f"  事件前預警：{r['事件前預警']}")
