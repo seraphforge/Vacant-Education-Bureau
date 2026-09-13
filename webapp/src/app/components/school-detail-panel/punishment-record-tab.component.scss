@@ -1,0 +1,96 @@
+/* 裁罰紀錄 Tab。tab-empty.scss 提供空狀態樣式，這裡只補有資料時的版面。 */
+.punish {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.punish__loading {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 0;
+}
+
+.punish__summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.punish__meta {
+  font-size: 0.85rem;
+  color: var(--text-color-secondary);
+}
+
+/* p-message 預設是 inline-block，撐滿寬度比較好讀 */
+:host ::ng-deep .punish__wide {
+  width: 100%;
+
+  .p-message {
+    width: 100%;
+    margin: 0;
+  }
+
+  .p-message-text {
+    line-height: 1.6;
+  }
+}
+
+.punish__content {
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* 法令依據等欄位用 dl 排成「標籤 / 內容」兩欄，公文欄位多但都很短 */
+.punish__fields {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.45rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+
+  dt {
+    color: var(--text-color-secondary);
+  }
+
+  dd {
+    margin: 0;
+    /* 法令條文常常很長，允許在任意位置斷行 */
+    overflow-wrap: anywhere;
+  }
+}
+
+.punish__docno {
+  font-variant-numeric: tabular-nums;
+}
+
+.punish__renamed {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-color-secondary);
+}
+
+.punish__date {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.punish__fine {
+  text-align: right;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+
+.punish__col-date {
+  width: 7rem;
+}
+
+.punish__col-fine {
+  width: 7.5rem;
+  text-align: right;
+}

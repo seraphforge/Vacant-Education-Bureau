@@ -1,0 +1,86 @@
+@if (loading()) {
+  <div class="punish__loading">
+    <p-progressSpinner styleClass="w-3rem h-3rem" strokeWidth="4"></p-progressSpinner>
+  </div>
+} @else if (errorMessage()) {
+  <p-message severity="warn" [text]="errorMessage()!" styleClass="punish__wide"></p-message>
+} @else if (!count()) {
+  <div class="tab-empty">
+    <i class="pi pi-shield"></i>
+    <h3>查無裁罰紀錄</h3>
+    <p>
+      本府資料庫中沒有這間園所的裁罰紀錄。目前資料僅涵蓋新北市，
+      查無紀錄不代表全國查無，亦不代表未曾有違規情形。
+    </p>
+  </div>
+} @else {
+  <div class="punish">
+    <!-- 統計列：筆數與罰鍰總額，不做加權評分 -->
+    <div class="punish__summary">
+      <p-tag [value]="'裁罰 ' + count() + ' 筆'" severity="danger"></p-tag>
+      @if (totalFine() > 0) {
+        <p-tag
+          [value]="'罰鍰總額 ' + (totalFine() | number) + ' 元'"
+          severity="warning"
+        ></p-tag>
+        <span class="punish__meta">（含罰鍰者 {{ finedCount() }} 筆）</span>
+      } @else {
+        <span class="punish__meta">本園紀錄未載明罰鍰金額</span>
+      }
+    </div>
+
+    <p-message
+      severity="info"
+      text="資料來源：全國教保資訊網「裁罰紀錄查詢」。以下為已生效的官方處分紀錄，可憑文號回查原件。"
+      styleClass="punish__wide"
+    ></p-message>
+
+    <p-table
+      [value]="records()"
+      styleClass="p-datatable-sm"
+      [tableStyle]="{ 'min-width': '100%' }"
+    >
+      <ng-template pTemplate="header">
+        <tr>
+          <th scope="col" class="punish__col-date">處分日期</th>
+          <th scope="col">處分內容</th>
+          <th scope="col" class="punish__col-fine">罰鍰（元）</th>
+        </tr>
+      </ng-template>
+
+      <ng-template pTemplate="body" let-record>
+        <tr>
+          <td class="punish__date">{{ orDash(record.punish_date) }}</td>
+          <td>
+            <div class="punish__content">{{ orDash(record.content) }}</div>
+
+            <dl class="punish__fields">
+              <dt>法令依據</dt>
+              <dd>{{ orDash(record.legal_basis) }}</dd>
+              <dt>違反事項</dt>
+              <dd>{{ orDash(record.violated_rule) }}</dd>
+              <dt>受處分人</dt>
+              <dd>{{ orDash(record.person) }}</dd>
+              <dt>文號</dt>
+              <dd class="punish__docno">{{ orDash(record.doc_no) }}</dd>
+            </dl>
+
+            @if (renamed(record)) {
+              <div class="punish__renamed">
+                <i class="pi pi-info-circle"></i>
+                處分當時園名：{{ record.school_name_at_time }}
+              </div>
+            }
+          </td>
+          <td class="punish__fine">
+            @if (record.fine_amount) {
+              {{ record.fine_amount | number }}
+            } @else {
+              —
+            }
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+}

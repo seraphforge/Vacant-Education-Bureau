@@ -5,13 +5,17 @@ import { TabViewModule } from 'primeng/tabview';
 import { Kindergarten } from '../../models/kindergarten.model';
 import { FinancialReportTabComponent } from './financial-report-tab.component';
 import { PublicOpinionTabComponent } from './public-opinion-tab.component';
+import { PunishmentRecordTabComponent } from './punishment-record-tab.component';
 import { RiskAssessmentTabComponent } from './risk-assessment-tab.component';
 
 /**
  * 詳細資料 Tabbed 浮動面板（UI_SPEC §6.3）。
  *
  * PrimeNG Dialog + TabView，開啟時預設顯示第一個 Tab「風險評估」。
- * 三個 Tab：風險評估（雷達圖）、財報（殼）、輿情分析（殼）。
+ * 四個 Tab：風險評估（雷達圖）、裁罰紀錄（官方處分）、財報（殼）、輿情分析。
+ *
+ * 「裁罰紀錄」排在「輿情分析」之前是刻意的：前者是可憑文號回查的官方處分，
+ * 後者是需要人工複核的網路線索，兩者的證據強度不同，不應混在同一張表。
  *
  * 用 [(visible)] 雙向綁定一個內部 signal（visible），而不是把整個 p-dialog
  * 包在 @if 裡並硬綁 [visible]="true"。後者會讓 PrimeNG 內部關閉狀態與外部
@@ -24,6 +28,7 @@ import { RiskAssessmentTabComponent } from './risk-assessment-tab.component';
     DialogModule,
     TabViewModule,
     RiskAssessmentTabComponent,
+    PunishmentRecordTabComponent,
     FinancialReportTabComponent,
     PublicOpinionTabComponent,
   ],

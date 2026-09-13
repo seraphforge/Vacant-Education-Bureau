@@ -40,6 +40,43 @@ export interface KindergartenPage {
   county?: string | null;
 }
 
+/**
+ * 對應 readme.kindergarten_punishment 一列（單一幼兒園查詢回傳的欄位）。
+ *
+ * 來源為全國教保資訊網「裁罰紀錄查詢」，欄位幾乎都可能是 null
+ * （公布欄本身就有缺漏），所以前端一律要處理空值。
+ */
+export interface PunishmentRecord {
+  id: number;
+  /** 處分日期，YYYY-MM-DD */
+  punish_date: string | null;
+  /** 處分當時的園名，可能與現名不同（改名／改制） */
+  school_name_at_time: string | null;
+  doc_no: string | null;
+  legal_basis: string | null;
+  violated_rule: string | null;
+  person: string | null;
+  content: string | null;
+  /** 罰鍰金額（元）；非罰鍰類處分為 null */
+  fine_amount: number | null;
+}
+
+/** GET /api/kindergartens/{id}/punishments 的回應 */
+export interface KindergartenPunishments {
+  kindergarten: {
+    id: number;
+    school_name: string;
+    county: string;
+    district: string;
+    address: string;
+    phone: string;
+  };
+  records: PunishmentRecord[];
+  count: number;
+  /** 這些紀錄的罰鍰總額 */
+  totalFine: number;
+}
+
 export interface CountyOption {
   county: string;
   count: number;

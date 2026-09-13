@@ -7,6 +7,7 @@ import {
   AcademicYearOption,
   CountyOption,
   KindergartenPage,
+  KindergartenPunishments,
   KindergartenQuery,
 } from '../models/kindergarten.model';
 
@@ -35,5 +36,17 @@ export class KindergartenService {
       }
     });
     return this.http.get<KindergartenPage>(`${this.base}/api/kindergartens`, { params });
+  }
+
+  /**
+   * 單一幼兒園的裁罰紀錄（含罰鍰總額）。
+   *
+   * 這是公開端點，authInterceptor 不會帶 token（裁罰紀錄本身就是公開資訊），
+   * 只是目前僅在政府端的詳細資料面板使用。
+   */
+  getPunishments(kindergartenId: number): Observable<KindergartenPunishments> {
+    return this.http.get<KindergartenPunishments>(
+      `${this.base}/api/kindergartens/${kindergartenId}/punishments`,
+    );
   }
 }
